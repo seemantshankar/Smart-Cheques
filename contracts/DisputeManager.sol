@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./SmartChequeEscrow.sol";
 
@@ -15,6 +16,7 @@ contract DisputeManager is
     Initializable, 
     AccessControlUpgradeable, 
     PausableUpgradeable, 
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable 
 {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -98,6 +100,7 @@ contract DisputeManager is
     function initialize() public initializer {
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -190,11 +193,16 @@ contract DisputeManager is
      */
     function resolveDispute(
         bytes32 disputeId
-    ) external onlyRole(ARBITRATOR_ROLE) whenNotPaused {
+    ) external onlyRole(ARBITRATOR_ROLE) whenNotPaused nonReentrant {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.status == DisputeStatus.ResolutionProposed, "Invalid dispute status");
         require(dispute.arbitrator == msg.sender, "Not assigned arbitrator");
 
+        // Update state before external calls (CEI pattern)
+        dispute.status = DisputeStatus.Resolved;
+        dispute.resolvedAt = block.timestamp;
+
+        // External interactions after state changes
         SmartChequeEscrow cheque = SmartChequeEscrow(dispute.chequeContract);
 
         if (dispute.proposedResolution == ResolutionType.ReleaseFunds) {
@@ -204,9 +212,6 @@ contract DisputeManager is
         } else if (dispute.proposedResolution == ResolutionType.PartialRelease) {
             // TODO: Implement partial release logic
         }
-
-        dispute.status = DisputeStatus.Resolved;
-        dispute.resolvedAt = block.timestamp;
 
         emit DisputeResolved(
             disputeId,

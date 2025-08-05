@@ -45,11 +45,6 @@ contract SmartChequeEscrow is
         _;
     }
 
-    modifier onlySeller() {
-        require(msg.sender == seller, "Only seller can call this");
-        _;
-    }
-
     modifier notFinalized() {
         require(!isFinalized, "Contract is finalized");
         _;

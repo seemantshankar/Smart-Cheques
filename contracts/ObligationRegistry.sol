@@ -4,8 +4,8 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title ObligationRegistry
@@ -15,6 +15,7 @@ contract ObligationRegistry is
     Initializable, 
     AccessControlUpgradeable, 
     PausableUpgradeable, 
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable 
 {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -63,6 +64,7 @@ contract ObligationRegistry is
     function initialize() public initializer {
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -120,19 +122,24 @@ contract ObligationRegistry is
      */
     function verifyObligation(
         bytes32 obligationId
-    ) external whenNotPaused returns (bool success) {
+    ) external whenNotPaused nonReentrant returns (bool success) {
         Obligation storage obligation = obligations[obligationId];
         require(obligation.hash != bytes32(0), "Obligation does not exist");
         require(!obligation.isVerified, "Obligation already verified");
 
-        // Call oracle contract to verify obligation
+        // Update state before external call (CEI pattern)
+        obligation.isVerified = true;
+        obligation.verificationTimestamp = block.timestamp;
+
+        // External interaction after state changes
         (success, ) = obligation.oracleAddress.call(
             abi.encodePacked(obligation.oracleFunction, obligation.parameters)
         );
 
-        if (success) {
-            obligation.isVerified = true;
-            obligation.verificationTimestamp = block.timestamp;
+        // Revert state if oracle call failed
+        if (!success) {
+            obligation.isVerified = false;
+            obligation.verificationTimestamp = 0;
         }
 
         emit ObligationVerified(obligationId, success, block.timestamp);

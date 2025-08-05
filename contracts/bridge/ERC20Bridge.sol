@@ -188,10 +188,7 @@ contract ERC20Bridge is
             )
         );
 
-        // Transfer tokens to bridge
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-
-        // Store deposit data
+        // Update state before external call (CEI pattern)
         deposits[depositId] = DepositData({
             token: token,
             depositor: msg.sender,
@@ -202,6 +199,9 @@ contract ERC20Bridge is
             txHash: blockhash(block.number - 1),
             processed: false
         });
+
+        // External interaction after state changes
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
         emit TokenDeposited(
             depositId,
@@ -278,6 +278,27 @@ contract ERC20Bridge is
     }
 
     /**
+     * @dev Challenge a withdrawal during challenge period
+     * @param withdrawalId Withdrawal identifier
+     */
+    function challengeWithdrawal(
+        bytes32 withdrawalId
+    ) external {
+        WithdrawalData storage withdrawal = withdrawals[withdrawalId];
+        
+        if (withdrawal.processed) revert AlreadyProcessed();
+        if (block.timestamp >= withdrawal.challengeDeadline) {
+            revert ChallengeStillActive();
+        }
+        if (!hasRole(VALIDATOR_ROLE, msg.sender)) revert InvalidValidator();
+
+        // Extend challenge deadline
+        withdrawal.challengeDeadline += CHALLENGE_PERIOD;
+
+        emit WithdrawalChallenged(withdrawalId, msg.sender);
+    }
+
+    /**
      * @dev Finalize withdrawal after challenge period
      * @param withdrawalId Withdrawal identifier
      */
@@ -335,6 +356,33 @@ contract ERC20Bridge is
         _grantRole(VALIDATOR_ROLE, validator);
         
         emit ValidatorAdded(validator, stake);
+    }
+
+    /**
+     * @dev Remove validator
+     * @param validator Validator address
+     */
+    function removeValidator(
+        address validator
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 stake = validatorStakes[validator];
+        if (stake == 0) revert InvalidValidator();
+
+        // Remove from validators array
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validators[i] == validator) {
+                validators[i] = validators[validators.length - 1];
+                validators.pop();
+                break;
+            }
+        }
+
+        validatorStakes[validator] = 0;
+        totalValidatorStake -= stake;
+        
+        _revokeRole(VALIDATOR_ROLE, validator);
+        
+        emit ValidatorRemoved(validator);
     }
 
     /**

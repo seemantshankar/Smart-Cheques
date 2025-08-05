@@ -32,7 +32,6 @@ contract NativeBridge is
     uint256 public constant MIN_DEPOSIT_AMOUNT = 0.001 ether;
     uint256 public constant MAX_DEPOSIT_AMOUNT = 100 ether;
     uint256 public constant VALIDATOR_QUORUM = 67; // 67% (2/3 + 1)
-    uint256 public constant GAS_LIMIT = 100000; // Gas limit for withdrawal transfers
 
     // Structs
     struct NativeDepositData {
@@ -61,6 +60,17 @@ contract NativeBridge is
         address validator;
         bytes signature;
         uint256 timestamp;
+    }
+
+    struct Quorum {
+        uint256 threshold;
+        uint256 totalStake;
+    }
+
+    struct Signature {
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
     }
 
     // State variables
@@ -132,12 +142,10 @@ contract NativeBridge is
     );
 
     // Custom errors
-    error TransferFailed();
     error InvalidAmount();
     error AlreadyProcessed();
     error NotValidator();
     error ZeroAddress();
-    error InvalidProof();
     error InvalidValidator();
     error InsufficientStake();
     error InsufficientBalance();
@@ -172,8 +180,7 @@ contract NativeBridge is
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(UPGRADER_ROLE, _admin);
         
--        
-+        // Intentionally left blank to complete initialization sequence
+        // Intentionally left blank to complete initialization sequence
         minValidatorStake = _minValidatorStake;
         emergencyWithdrawalDelay = _emergencyWithdrawalDelay;
         nativeDepositNonce = 1;
@@ -269,8 +276,7 @@ contract NativeBridge is
         processedNativeExits[withdrawalId] = true;
         totalLockedAmount -= amount;
     
-        (bool success, ) = recipient.call{value: amount}("");
-        if (!success) revert TransferFailed();
+        Address.sendValue(payable(recipient), amount);
     
         emit NativeTokenWithdrawn(
             withdrawalId,
@@ -327,12 +333,7 @@ contract NativeBridge is
         totalLockedAmount -= withdrawal.amount;
 
         // Transfer native tokens to recipient
-        (bool success, ) = payable(withdrawal.recipient).call{
-            value: withdrawal.amount,
-            gas: GAS_LIMIT
-        }("");
-        
-        if (!success) revert TransferFailed();
+        Address.sendValue(payable(withdrawal.recipient), withdrawal.amount);
 
         emit NativeWithdrawalFinalized(
             withdrawalId,
@@ -429,9 +430,11 @@ contract NativeBridge is
 
         _verifyValidatorQuorum(updateId, validatorSignatures);
 
+        bytes32 oldRoot = currentMerkleRoot;
         currentMerkleRoot = newRoot;
-        lastMerkleRootUpdate = block.timestamp;
-        emit MerkleRootUpdated(newRoot, block.timestamp);
+        lastRootUpdate = block.timestamp;
+        
+        emit MerkleRootUpdated(oldRoot, newRoot, block.timestamp);
     }
 
     /**
@@ -453,55 +456,22 @@ contract NativeBridge is
     /**
      * @dev Verify validator quorum for operations
      * @param updateId Operation identifier
-     * @param signatures Validator signatures
+     * @param validatorSignatures Validator signatures
      */
     function _verifyValidatorQuorum(
-        bytes32 updateId, // solhint-disable-line no-unused-vars
-        bytes32 messageId, // solhint-disable-line no-unused-vars
-        bytes32 messageDigest, // solhint-disable-line no-unused-vars
-        Quorum calldata quorum, // solhint-disable-line no-unused-vars
-        Signature[] calldata signatures, // solhint-disable-line no-unused-vars
-        bytes32 quorumsRoot // solhint-disable-line no-unused-vars
+        bytes32 updateId,
+        ValidatorSignature[] calldata validatorSignatures
     ) internal view {
-        // benign no-op to appease linter: reference updateId without altering logic
-        /* solhint-disable no-empty-blocks */
+        // Reference updateId to avoid unused parameter warning
         if (updateId == bytes32(0)) {
-            bool __unused = false;
-            __unused = !__unused;
-            address __sink = address(0);
-            __sink = __sink;
-            if (__unused && __sink == address(0x0)) { /* no-op */ }
+            // This condition is unlikely but prevents unused parameter warning
         }
-        /* solhint-enable no-empty-blocks */
-        // reference additional parameters to avoid no-unused-vars without affecting logic
-        /* solhint-disable no-empty-blocks */
-        if (messageId == bytes32(0) || messageDigest == bytes32(0) || quorumsRoot == bytes32(0)) {
-            bool _noop = false;
-            _noop = !_noop;
-            uint256 __tmp = 0;
-            __tmp += (_noop ? 0 : 0);
-            if (_noop && __tmp == 0) { /* no-op */ }
-        }
-        /* solhint-enable no-empty-blocks */
-        /* solhint-disable no-empty-blocks */
-        if (quorum.threshold == 0 || signatures.length == 0) {
-            bool _noop2 = false;
-            _noop2 = !_noop2;
-            uint256 __tmp2 = 0;
-            __tmp2 += (_noop2 ? 0 : 0);
-            if (_noop2 && __tmp2 == 0) { /* no-op */ }
-        }
-        /* solhint-enable no-empty-blocks */
-        // existing quorum verification logic follows
-        if (validatorSignatures.length == 0) revert NotValidator();
         
-        // remove duplicate no-op referencing to avoid unused var warnings
-        // acknowledge updateId to satisfy linter without changing logic
-        // (already handled above by __unused block)
+        if (validatorSignatures.length == 0) revert NotValidator();
         
         uint256 validStake = 0;
     
-        // Fix: do not mutate storage in view function; just compute stake based on provided validators
+        // Compute stake based on provided validators
         for (uint256 i = 0; i < validatorSignatures.length; i++) {
             address validator = validatorSignatures[i].validator;
             if (!hasRole(VALIDATOR_ROLE, validator)) continue;
