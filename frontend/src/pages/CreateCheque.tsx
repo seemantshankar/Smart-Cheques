@@ -30,7 +30,7 @@ interface Milestone {
 const CreateCheque = () => {
   const navigate = useNavigate();
   const toast = useToast();
-  const { account, library } = useWeb3React();
+  const { account, provider } = useWeb3React();
 
   const [seller, setSeller] = useState('');
   const [milestones, setMilestones] = useState<Milestone[]>([{
@@ -57,7 +57,7 @@ const CreateCheque = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!account || !library) {
+    if (!account || !provider) {
       toast({
         title: 'Error',
         description: 'Please connect your wallet first',
@@ -93,7 +93,7 @@ const CreateCheque = () => {
       const factoryContract = new ethers.Contract(
         import.meta.env.VITE_FACTORY_ADDRESS!,
         ['function createCheque(address,address,uint256,uint256[],bytes32[]) returns (uint256)'],
-        library.getSigner()
+        provider.getSigner()
       );
 
       // Create cheque

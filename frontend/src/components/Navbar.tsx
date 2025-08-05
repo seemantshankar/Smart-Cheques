@@ -1,14 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
-// Extend the existing ethereum interface
-declare global {
-  interface Window {
-    ethereum?: any;
-  }
-}
-
 // Type assertion helper for ethereum
-const getEthereum = () => window.ethereum as any;
+const getEthereum = () => (window as any).ethereum;
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -31,7 +24,7 @@ const Navbar = () => {
   const isActivating = useIsActivating();
   const active = useIsActive();
   const provider = useProvider();
-  const { error } = useWeb3React();
+  // Note: error property removed in Web3React v8
   const library = provider;
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(true);
@@ -320,19 +313,6 @@ const connectWallet = async () => {
                   colorScheme={'orange'}
                 >
                   Install MetaMask
-                </Button>
-              </Box>
-            ) : error ? (
-              <Box>
-                <Text color="red.500" fontSize="xs" mb={1}>
-                  Connection Error: {error.message}
-                </Text>
-                <Button
-                  onClick={connectWallet}
-                  size={'sm'}
-                  colorScheme={'orange'}
-                >
-                  Try Again
                 </Button>
               </Box>
             ) : active ? (

@@ -1,0 +1,444 @@
+# Smart Cheques Layer-2 Network Configuration
+# Complete network setup with all node types and supporting infrastructure
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: smart-cheques-l2
+  labels:
+    name: smart-cheques-l2
+    tier: blockchain
+    network: layer2
+
+---
+# Network Policies
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: smart-cheques-network-policy
+  namespace: smart-cheques-l2
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: smart-cheques-l2
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: smart-cheques-l2
+  - to: []  # Allow external egress
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS
+    - protocol: TCP
+      port: 80   # HTTP
+    - protocol: TCP
+      port: 53   # DNS
+    - protocol: UDP
+      port: 53   # DNS
+    - protocol: TCP
+      port: 30303  # P2P
+
+---
+# Storage Classes
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-nvme
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "16000"
+  throughput: "1000"
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard-ssd
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: bulk-storage
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: st1  # Throughput optimized HDD
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+
+---
+# Global Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-config
+  namespace: smart-cheques-l2
+data:
+  chain_id: "137"
+  network_id: "137"
+  network_name: "Smart Cheques L2"
+  consensus_mechanism: "PoS"
+  block_time: "2"
+  gas_limit: "30000000"
+  gas_price: "1000000000"
+  
+  # Network topology
+  sequencer_count: "1"
+  validator_count: "3"
+  full_node_count: "5"
+  archive_node_count: "2"
+  
+  # P2P Configuration
+  p2p_port: "30303"
+  discovery_enabled: "true"
+  nat_enabled: "true"
+  
+  # RPC Configuration
+  rpc_port: "8545"
+  ws_port: "8546"
+  
+  # Metrics
+  metrics_port: "9090"
+  metrics_enabled: "true"
+  
+  # Security
+  cors_domain: "*"
+  vhosts: "*"
+  ws_origins: "*"
+  
+  # Bridge Configuration
+  l1_chain_id: "1"  # Ethereum Mainnet
+  bridge_contract_l1: "0x0000000000000000000000000000000000000000"
+  bridge_contract_l2: "0x0000000000000000000000000000000000000000"
+  
+  # Oracle Configuration
+  chainlink_enabled: "true"
+  band_protocol_enabled: "true"
+  custom_oracle_enabled: "true"
+  oracle_update_interval: "300"  # 5 minutes
+  
+  # Staking Configuration
+  min_validator_stake: "10000000000000000000000"  # 10k tokens
+  max_validators: "100"
+  unbonding_period: "1814400"  # 21 days in seconds
+  slashing_enabled: "true"
+  
+  # Economic Parameters
+  base_fee_max_change_denominator: "8"
+  elasticity_multiplier: "2"
+  target_gas_used: "15000000"
+  
+  # Upgrade Configuration
+  upgrade_block_delay: "100800"  # ~1 week at 2s blocks
+  governance_delay: "604800"     # 1 week in seconds
+
+---
+# L1 Connection Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: l1-config
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded L1 RPC URL
+  rpc-url: "REPLACE_WITH_BASE64_ENCODED_L1_RPC_URL"
+  # Base64 encoded L1 WebSocket URL
+  ws-url: "REPLACE_WITH_BASE64_ENCODED_L1_WS_URL"
+  # Base64 encoded L1 private key for bridge operations
+  private-key: "REPLACE_WITH_BASE64_ENCODED_L1_PRIVATE_KEY"
+
+---
+# Backup Credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-credentials
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded AWS credentials for S3 backup
+  aws-access-key-id: "REPLACE_WITH_BASE64_ENCODED_AWS_ACCESS_KEY"
+  aws-secret-access-key: "REPLACE_WITH_BASE64_ENCODED_AWS_SECRET_KEY"
+  aws-region: "REPLACE_WITH_BASE64_ENCODED_AWS_REGION"
+  s3-bucket: "REPLACE_WITH_BASE64_ENCODED_S3_BUCKET"
+  encryption-key: "REPLACE_WITH_BASE64_ENCODED_ENCRYPTION_KEY"
+
+---
+# Ingress for External Access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: smart-cheques-ingress
+  namespace: smart-cheques-l2
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  tls:
+  - hosts:
+    - rpc.smartcheques.io
+    - ws.smartcheques.io
+    - archive.smartcheques.io
+    secretName: smart-cheques-tls
+  rules:
+  - host: rpc.smartcheques.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: full-node-service
+            port:
+              number: 8545
+  - host: ws.smartcheques.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: full-node-service
+            port:
+              number: 8546
+  - host: archive.smartcheques.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: archive-external
+            port:
+              number: 8545
+
+---
+# Prometheus ServiceMonitor for Network-wide Metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: smart-cheques-network
+  namespace: smart-cheques-l2
+  labels:
+    app: smart-cheques-l2
+spec:
+  selector:
+    matchLabels:
+      tier: blockchain
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# Grafana Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smart-cheques-dashboard
+  namespace: smart-cheques-l2
+  labels:
+    grafana_dashboard: "1"
+data:
+  smart-cheques-l2.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Smart Cheques L2 Network",
+        "tags": ["blockchain", "layer2", "smart-cheques"],
+        "style": "dark",
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Network Overview",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "up{job=\"smart-cheques-l2\"}",
+                "legendFormat": "Nodes Online"
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Block Height",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "ethereum_blockchain_head_block{job=\"smart-cheques-l2\"}",
+                "legendFormat": "{{instance}}"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Transaction Pool",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "ethereum_txpool_pending{job=\"smart-cheques-l2\"}",
+                "legendFormat": "Pending - {{instance}}"
+              },
+              {
+                "expr": "ethereum_txpool_queued{job=\"smart-cheques-l2\"}",
+                "legendFormat": "Queued - {{instance}}"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "P2P Peers",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "ethereum_p2p_peers{job=\"smart-cheques-l2\"}",
+                "legendFormat": "{{instance}}"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "title": "Gas Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "ethereum_blockchain_head_block_gas_used{job=\"smart-cheques-l2\"}",
+                "legendFormat": "Gas Used - {{instance}}"
+              },
+              {
+                "expr": "ethereum_blockchain_head_block_gas_limit{job=\"smart-cheques-l2\"}",
+                "legendFormat": "Gas Limit - {{instance}}"
+              }
+            ]
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }
+
+---
+# Network Health Check Job
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: network-health-check
+  namespace: smart-cheques-l2
+spec:
+  schedule: "*/5 * * * *"  # Every 5 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: health-check
+            image: smart-cheques/health-checker:latest
+            env:
+            - name: SEQUENCER_URL
+              value: "http://sequencer-service:8545"
+            - name: VALIDATOR_URL
+              value: "http://validator-service:8545"
+            - name: FULL_NODE_URL
+              value: "http://full-node-service:8545"
+            - name: ARCHIVE_URL
+              value: "http://archive-service:8545"
+            - name: ALERT_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: alert-config
+                  key: webhook-url
+            command:
+            - /bin/sh
+            - -c
+            - |
+              #!/bin/sh
+              echo "Starting network health check..."
+              
+              # Check each node type
+              for url in $SEQUENCER_URL $VALIDATOR_URL $FULL_NODE_URL $ARCHIVE_URL; do
+                echo "Checking $url"
+                response=$(curl -s -X POST -H "Content-Type: application/json" \
+                  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+                  $url)
+                
+                if echo $response | grep -q "result"; then
+                  echo "✓ $url is healthy"
+                else
+                  echo "✗ $url is unhealthy"
+                  # Send alert
+                  curl -X POST $ALERT_WEBHOOK \
+                    -H "Content-Type: application/json" \
+                    -d "{\"text\":\"🚨 Smart Cheques L2 Node Unhealthy: $url\"}"
+                fi
+              done
+              
+              echo "Health check completed"
+          restartPolicy: OnFailure
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+---
+# Alert Configuration Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alert-config
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded webhook URL for alerts (Slack, Discord, etc.)
+  webhook-url: "REPLACE_WITH_BASE64_ENCODED_WEBHOOK_URL"

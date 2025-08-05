@@ -27,7 +27,7 @@ interface Cheque {
 }
 
 const Dashboard = () => {
-  const { account, library } = useWeb3React();
+  const { account, provider } = useWeb3React();
   const [cheques, setCheques] = useState<Cheque[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -40,7 +40,7 @@ const Dashboard = () => {
 
   useEffect(() => {
     const fetchCheques = async () => {
-      if (!account || !library) return;
+      if (!account || !provider) return;
 
       try {
         const response = await fetch(`${import.meta.env.VITE_API_URL}/cheques?address=${account}`);
@@ -70,7 +70,7 @@ const Dashboard = () => {
     };
 
     fetchCheques();
-  }, [account, library]);
+  }, [account, provider]);
 
   const getStatusBadge = (status: string) => {
     const statusMap: { [key: string]: { color: string; label: string } } = {

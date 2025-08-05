@@ -14,7 +14,7 @@ import ChequeDetails from './pages/ChequeDetails';
 import DisputeManager from './pages/DisputeManager';
 
 function App() {
-  const connectors = useMemo(() => [[metaMask, metaMaskHooks]] as const, []);
+  const connectors: [Connector, Web3ReactHooks][] = useMemo(() => [[metaMask, metaMaskHooks]], []);
   return (
     <Web3ReactProvider connectors={connectors} lookupENS={false}>
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>

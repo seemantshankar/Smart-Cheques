@@ -1,0 +1,328 @@
+# Sequencer Node Deployment Template
+# Responsible for transaction ordering, block production, and MEV protection
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sequencer-node
+  namespace: smart-cheques-l2
+  labels:
+    app: sequencer-node
+    tier: consensus
+    role: sequencer
+spec:
+  replicas: 1  # Single sequencer for now, can be scaled with leader election
+  selector:
+    matchLabels:
+      app: sequencer-node
+  template:
+    metadata:
+      labels:
+        app: sequencer-node
+        tier: consensus
+        role: sequencer
+    spec:
+      containers:
+      - name: sequencer
+        image: smart-cheques/sequencer-node:latest
+        ports:
+        - containerPort: 8545  # JSON-RPC
+        - containerPort: 8546  # WebSocket
+        - containerPort: 30303 # P2P
+        - containerPort: 9090  # Metrics
+        env:
+        - name: NODE_TYPE
+          value: "sequencer"
+        - name: CHAIN_ID
+          value: "137"  # Polygon
+        - name: NETWORK_ID
+          value: "137"
+        - name: L1_RPC_URL
+          valueFrom:
+            secretKeyRef:
+              name: l1-config
+              key: rpc-url
+        - name: SEQUENCER_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sequencer-keys
+              key: private-key
+        - name: BLOCK_TIME
+          value: "2s"
+        - name: GAS_LIMIT
+          value: "30000000"
+        - name: BASE_FEE
+          value: "30000000000"  # 30 gwei
+        - name: MEV_PROTECTION
+          value: "true"
+        - name: MAX_TXS_PER_BLOCK
+          value: "1000"
+        - name: METRICS_ENABLED
+          value: "true"
+        - name: LOG_LEVEL
+          value: "info"
+        resources:
+          requests:
+            cpu: "8"
+            memory: "32Gi"
+            storage: "1Ti"
+          limits:
+            cpu: "16"
+            memory: "64Gi"
+            storage: "2Ti"
+        volumeMounts:
+        - name: sequencer-data
+          mountPath: /data
+        - name: sequencer-config
+          mountPath: /config
+        - name: sequencer-keys
+          mountPath: /keys
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: sequencer-data
+        persistentVolumeClaim:
+          claimName: sequencer-data-pvc
+      - name: sequencer-config
+        configMap:
+          name: sequencer-config
+      - name: sequencer-keys
+        secret:
+          secretName: sequencer-keys
+          defaultMode: 0400
+      nodeSelector:
+        node-type: "high-performance"
+      tolerations:
+      - key: "sequencer"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: "role"
+                operator: In
+                values: ["sequencer"]
+            topologyKey: "kubernetes.io/hostname"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sequencer-service
+  namespace: smart-cheques-l2
+  labels:
+    app: sequencer-node
+spec:
+  type: LoadBalancer
+  ports:
+  - name: json-rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: websocket
+    port: 8546
+    targetPort: 8546
+    protocol: TCP
+  - name: p2p
+    port: 30303
+    targetPort: 30303
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: sequencer-node
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sequencer-data-pvc
+  namespace: smart-cheques-l2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 2Ti
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sequencer-config
+  namespace: smart-cheques-l2
+data:
+  genesis.json: |
+    {
+      "config": {
+        "chainId": 137,
+        "homesteadBlock": 0,
+        "eip150Block": 0,
+        "eip155Block": 0,
+        "eip158Block": 0,
+        "byzantiumBlock": 0,
+        "constantinopleBlock": 0,
+        "petersburgBlock": 0,
+        "istanbulBlock": 0,
+        "berlinBlock": 0,
+        "londonBlock": 0,
+        "clique": {
+          "period": 2,
+          "epoch": 30000
+        }
+      },
+      "difficulty": "0x1",
+      "gasLimit": "0x1c9c380",
+      "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "alloc": {}
+    }
+  
+  node.toml: |
+    [node]
+    type = "sequencer"
+    chain_id = 137
+    network_id = 137
+    
+    [consensus]
+    mechanism = "clique"
+    block_time = "2s"
+    gas_limit = 30000000
+    base_fee = 30000000000
+    
+    [sequencer]
+    mev_protection = true
+    max_txs_per_block = 1000
+    tx_pool_size = 10000
+    priority_fee_threshold = 1000000000  # 1 gwei
+    
+    [rpc]
+    http_enabled = true
+    http_host = "0.0.0.0"
+    http_port = 8545
+    ws_enabled = true
+    ws_host = "0.0.0.0"
+    ws_port = 8546
+    
+    [p2p]
+    enabled = true
+    host = "0.0.0.0"
+    port = 30303
+    max_peers = 50
+    
+    [metrics]
+    enabled = true
+    host = "0.0.0.0"
+    port = 9090
+    
+    [logging]
+    level = "info"
+    format = "json"
+    output = "stdout"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sequencer-keys
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded private key (replace with actual key)
+  private-key: "REPLACE_WITH_BASE64_ENCODED_PRIVATE_KEY"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: l1-config
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded L1 RPC URL
+  rpc-url: "REPLACE_WITH_BASE64_ENCODED_L1_RPC_URL"
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sequencer-metrics
+  namespace: smart-cheques-l2
+  labels:
+    app: sequencer-node
+spec:
+  selector:
+    matchLabels:
+      app: sequencer-node
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sequencer-pdb
+  namespace: smart-cheques-l2
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: sequencer-node
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sequencer-hpa
+  namespace: smart-cheques-l2
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sequencer-node
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60

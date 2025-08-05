@@ -1,0 +1,487 @@
+# Archive Node Deployment Template
+# Responsible for storing complete blockchain history and serving historical data queries
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: archive-node
+  namespace: smart-cheques-l2
+  labels:
+    app: archive-node
+    tier: storage
+    role: archive
+spec:
+  replicas: 2  # Limited replicas due to storage requirements
+  selector:
+    matchLabels:
+      app: archive-node
+  template:
+    metadata:
+      labels:
+        app: archive-node
+        tier: storage
+        role: archive
+    spec:
+      containers:
+      - name: archive-node
+        image: smart-cheques/archive-node:latest
+        ports:
+        - containerPort: 8545  # JSON-RPC
+        - containerPort: 8546  # WebSocket
+        - containerPort: 30303 # P2P
+        - containerPort: 9090  # Metrics
+        - containerPort: 6060  # Debug/pprof
+        env:
+        - name: NODE_TYPE
+          value: "archive"
+        - name: CHAIN_ID
+          value: "137"
+        - name: NETWORK_ID
+          value: "137"
+        - name: SYNC_MODE
+          value: "full"  # Full sync for complete history
+        - name: GC_MODE
+          value: "archive"  # No state pruning
+        - name: CACHE_SIZE
+          value: "8192"  # MB - Larger cache for archive
+        - name: TRIE_CACHE_GENS
+          value: "120"  # Keep more trie cache generations
+        - name: SNAPSHOT_CACHE
+          value: "1024"  # MB
+        - name: MAX_PEERS
+          value: "25"  # Fewer peers to focus on storage
+        - name: DISCOVERY_ENABLED
+          value: "true"
+        - name: METRICS_ENABLED
+          value: "true"
+        - name: PPROF_ENABLED
+          value: "true"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: BOOTNODES
+          value: "enode://validator1@validator-headless:30303,enode://validator2@validator-headless:30303"
+        - name: TRUSTED_NODES
+          value: "enode://sequencer@sequencer-service:30303"
+        - name: RPC_CORS_DOMAIN
+          value: "*"
+        - name: RPC_VHOSTS
+          value: "*"
+        - name: WS_ORIGINS
+          value: "*"
+        - name: ARCHIVE_RPC_ENABLED
+          value: "true"
+        - name: TRACE_ENABLED
+          value: "true"
+        - name: DEBUG_ENABLED
+          value: "true"
+        - name: HISTORICAL_RPC_ENABLED
+          value: "true"
+        - name: STATE_SCHEME
+          value: "hash"  # Use hash-based state scheme for archive
+        - name: PREIMAGES_ENABLED
+          value: "true"  # Store preimages for debugging
+        - name: TXN_LOOKUP_LIMIT
+          value: "0"  # No limit for transaction lookups
+        - name: REORG_DEPTH
+          value: "64"  # Handle deeper reorgs
+        - name: ANCIENT_LIMIT
+          value: "0"  # Keep all ancient data
+        - name: RETENTION_HOURS
+          value: "0"  # No data retention limit
+        resources:
+          requests:
+            cpu: "4"
+            memory: "16Gi"
+            storage: "2Ti"
+          limits:
+            cpu: "8"
+            memory: "32Gi"
+            storage: "5Ti"
+        volumeMounts:
+        - name: archive-data
+          mountPath: /data
+        - name: archive-ancient
+          mountPath: /ancient
+        - name: archive-config
+          mountPath: /config
+        - name: keystore
+          mountPath: /keystore
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 120
+          periodSeconds: 60
+          timeoutSeconds: 15
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9090
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /startup
+            port: 9090
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 15
+          failureThreshold: 40
+      volumes:
+      - name: archive-data
+        persistentVolumeClaim:
+          claimName: archive-data-pvc
+      - name: archive-ancient
+        persistentVolumeClaim:
+          claimName: archive-ancient-pvc
+      - name: archive-config
+        configMap:
+          name: archive-config
+      - name: keystore
+        secret:
+          secretName: node-keystore
+          defaultMode: 0400
+      nodeSelector:
+        node-type: "storage"
+        storage-class: "high-performance"
+      tolerations:
+      - key: "storage"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: "role"
+                operator: In
+                values: ["archive"]
+            topologyKey: "kubernetes.io/hostname"
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: "storage-type"
+                operator: In
+                values: ["nvme", "ssd"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: archive-service
+  namespace: smart-cheques-l2
+  labels:
+    app: archive-node
+spec:
+  type: ClusterIP
+  ports:
+  - name: json-rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: websocket
+    port: 8546
+    targetPort: 8546
+    protocol: TCP
+  - name: p2p
+    port: 30303
+    targetPort: 30303
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: archive-node
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: archive-external
+  namespace: smart-cheques-l2
+  labels:
+    app: archive-node
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: json-rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: websocket
+    port: 8546
+    targetPort: 8546
+    protocol: TCP
+  selector:
+    app: archive-node
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: archive-data-pvc
+  namespace: smart-cheques-l2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-nvme
+  resources:
+    requests:
+      storage: 5Ti
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: archive-ancient-pvc
+  namespace: smart-cheques-l2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: bulk-storage
+  resources:
+    requests:
+      storage: 10Ti
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: archive-config
+  namespace: smart-cheques-l2
+data:
+  genesis.json: |
+    {
+      "config": {
+        "chainId": 137,
+        "homesteadBlock": 0,
+        "eip150Block": 0,
+        "eip155Block": 0,
+        "eip158Block": 0,
+        "byzantiumBlock": 0,
+        "constantinopleBlock": 0,
+        "petersburgBlock": 0,
+        "istanbulBlock": 0,
+        "berlinBlock": 0,
+        "londonBlock": 0,
+        "clique": {
+          "period": 2,
+          "epoch": 30000
+        }
+      },
+      "difficulty": "0x1",
+      "gasLimit": "0x1c9c380",
+      "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "alloc": {}
+    }
+  
+  node.toml: |
+    [node]
+    type = "archive"
+    chain_id = 137
+    network_id = 137
+    data_dir = "/data"
+    ancient_dir = "/ancient"
+    
+    [sync]
+    mode = "full"  # Full sync for complete history
+    gc_mode = "archive"  # No state pruning
+    snapshot = true
+    
+    [cache]
+    database = 2048     # MB - Larger for archive
+    trie = 1024         # MB - Larger trie cache
+    trie_dirty = 512    # MB
+    trie_time_limit = "10m"
+    gc = 10             # % - Less aggressive GC
+    snapshot = 1024     # MB - Larger snapshot cache
+    preimages = true    # Store preimages
+    
+    [state]
+    scheme = "hash"     # Use hash-based state scheme
+    
+    [rpc]
+    http_enabled = true
+    http_host = "0.0.0.0"
+    http_port = 8545
+    http_cors_domain = ["*"]
+    http_vhosts = ["*"]
+    http_modules = ["eth", "net", "web3", "txpool", "debug", "trace", "admin"]
+    
+    ws_enabled = true
+    ws_host = "0.0.0.0"
+    ws_port = 8546
+    ws_origins = ["*"]
+    ws_modules = ["eth", "net", "web3", "debug", "trace"]
+    
+    [p2p]
+    enabled = true
+    host = "0.0.0.0"
+    port = 30303
+    max_peers = 25
+    no_discovery = false
+    discovery_v5 = true
+    nat = "any"
+    
+    [txpool]
+    locals = []
+    no_locals = false
+    journal = "transactions.rlp"
+    rejournal = "1h"
+    price_limit = 1
+    price_bump = 10
+    account_slots = 16
+    global_slots = 4096
+    account_queue = 64
+    global_queue = 1024
+    lifetime = "3h"
+    
+    [miner]
+    enabled = false
+    
+    [metrics]
+    enabled = true
+    host = "0.0.0.0"
+    port = 9090
+    
+    [pprof]
+    enabled = true
+    host = "0.0.0.0"
+    port = 6060
+    
+    [logging]
+    level = "info"
+    format = "json"
+    output = "stdout"
+    
+    [archive]
+    retain_blocks = 0           # Keep all blocks
+    ancient_limit = 0           # No ancient limit
+    tx_lookup_limit = 0         # No transaction lookup limit
+    reorg_depth = 64            # Handle deeper reorgs
+    preimage_enabled = true     # Store preimages
+    
+    [trace]
+    enabled = true
+    timeout = "30s"
+    reexec = 128
+    
+    [debug]
+    enabled = true
+    verbosity = 3
+    vmodule = ""
+    backtrace_at = ""
+    debug_enabled = true
+    pprof_enabled = true
+    memprofile_rate = 524288
+    blockprofile_rate = 0
+    mutex_profile_fraction = 0
+    
+    [historical]
+    enabled = true
+    max_age = "0"  # No age limit
+    
+    [performance]
+    cache_preimages = true
+    trie_cache_gens = 120
+    commit_interval = 0  # Commit every block for archive
+    
+    [storage]
+    disable_ancient_compaction = false
+    ancient_freezer_table_size = 2000000000  # 2GB per table
+    
+    [backup]
+    enabled = true
+    interval = "24h"
+    retention = "30d"
+    compression = true
+    
+    [monitoring]
+    block_processing_time = true
+    state_processing_time = true
+    transaction_processing_time = true
+    storage_metrics = true
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: archive-metrics
+  namespace: smart-cheques-l2
+  labels:
+    app: archive-node
+spec:
+  selector:
+    matchLabels:
+      app: archive-node
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scrapeTimeout: 25s
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: archive-pdb
+  namespace: smart-cheques-l2
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: archive-node
+
+---
+# Backup CronJob for Archive Node
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: archive-backup
+  namespace: smart-cheques-l2
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: smart-cheques/backup-tool:latest
+            env:
+            - name: BACKUP_TYPE
+              value: "archive"
+            - name: SOURCE_PATH
+              value: "/data"
+            - name: BACKUP_DESTINATION
+              value: "s3://smart-cheques-backups/archive/"
+            - name: COMPRESSION
+              value: "true"
+            - name: ENCRYPTION
+              value: "true"
+            volumeMounts:
+            - name: archive-data
+              mountPath: /data
+              readOnly: true
+            - name: backup-config
+              mountPath: /config
+          volumes:
+          - name: archive-data
+            persistentVolumeClaim:
+              claimName: archive-data-pvc
+          - name: backup-config
+            secret:
+              secretName: backup-credentials
+          restartPolicy: OnFailure
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1

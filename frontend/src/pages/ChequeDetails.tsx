@@ -45,7 +45,7 @@ interface Cheque {
 
 const ChequeDetails = () => {
   const { id } = useParams<{ id: string }>();
-  const { account, library } = useWeb3React();
+  const { account, provider } = useWeb3React();
   const toast = useToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
 
@@ -57,10 +57,10 @@ const ChequeDetails = () => {
 
   useEffect(() => {
     fetchChequeDetails();
-  }, [id, account, library]);
+  }, [id, account, provider]);
 
   const fetchChequeDetails = async () => {
-    if (!id || !library) return;
+    if (!id || !provider) return;
 
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/cheques/${id}`);
@@ -84,7 +84,7 @@ const ChequeDetails = () => {
   };
 
   const handleCompleteMilestone = async () => {
-    if (!cheque || selectedMilestone === null || !library || !account) return;
+    if (!cheque || selectedMilestone === null || !provider || !account) return;
 
     try {
       setCompleting(true);
@@ -92,7 +92,7 @@ const ChequeDetails = () => {
       const chequeContract = new ethers.Contract(
         cheque.address,
         ['function completeMilestone(uint256,bytes) returns (bool)'],
-        library.getSigner()
+        provider.getSigner()
       );
 
       const tx = await chequeContract.completeMilestone(

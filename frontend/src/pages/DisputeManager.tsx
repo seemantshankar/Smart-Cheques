@@ -39,7 +39,7 @@ interface Dispute {
 }
 
 const DisputeManager = () => {
-  const { account, library } = useWeb3React();
+  const { account, provider } = useWeb3React();
   const toast = useToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
 
@@ -53,13 +53,13 @@ const DisputeManager = () => {
   const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
-    if (!account || !library) return;
+    if (!account || !provider) return;
     setLoading(true);
     fetchDisputes();
-  }, [account, library]);
+  }, [account, provider]);
 
   const fetchDisputes = async () => {
-    if (!account || !library) return;
+    if (!account || !provider) return;
 
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/disputes?address=${account}`);
@@ -108,7 +108,7 @@ const DisputeManager = () => {
   };
 
   const handleResolveDispute = async () => {
-    if (!selectedDispute || !library || !account) return;
+    if (!selectedDispute || !provider || !account) return;
 
     try {
       setResolving(true);
@@ -119,7 +119,7 @@ const DisputeManager = () => {
           'function proposeResolution(uint256,uint8,uint256) returns (bool)',
           'function resolveDispute(uint256) returns (bool)'
         ],
-        library.getSigner()
+        provider.getSigner()
       );
 
       // First propose resolution

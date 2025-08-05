@@ -117,7 +117,7 @@ describe("Smart Cheque System", function () {
     it("Should lock funds", async function () {
       // Deploy mock ERC20 token
       const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK")) as MockERC20;
+      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
       await token.mint(buyer.address, totalAmount);
 
       // Approve and lock funds
@@ -130,7 +130,7 @@ describe("Smart Cheque System", function () {
     it("Should complete milestone", async function () {
       // Setup mock token and lock funds
       const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK")) as MockERC20;
+      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
       await token.mint(buyer.address, totalAmount);
       await token.connect(buyer).approve(chequeAddress, totalAmount);
       await chequeContract.connect(buyer).lockFunds(token.address);
@@ -189,7 +189,7 @@ describe("Smart Cheque System", function () {
 
       // Setup mock token and lock funds
       const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK")) as MockERC20;
+      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
       await token.mint(buyer.address, totalAmount);
       await token.connect(buyer).approve(chequeAddress, totalAmount);
       await chequeContract.connect(buyer).lockFunds(token.address);

@@ -1,0 +1,426 @@
+# Full Node Deployment Template
+# Responsible for transaction relay, state synchronization, and serving RPC requests
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: full-node
+  namespace: smart-cheques-l2
+  labels:
+    app: full-node
+    tier: network
+    role: full-node
+spec:
+  replicas: 5  # Multiple full nodes for load distribution
+  selector:
+    matchLabels:
+      app: full-node
+  template:
+    metadata:
+      labels:
+        app: full-node
+        tier: network
+        role: full-node
+    spec:
+      containers:
+      - name: full-node
+        image: smart-cheques/full-node:latest
+        ports:
+        - containerPort: 8545  # JSON-RPC
+        - containerPort: 8546  # WebSocket
+        - containerPort: 30303 # P2P
+        - containerPort: 9090  # Metrics
+        - containerPort: 6060  # Debug/pprof
+        env:
+        - name: NODE_TYPE
+          value: "full"
+        - name: CHAIN_ID
+          value: "137"
+        - name: NETWORK_ID
+          value: "137"
+        - name: SYNC_MODE
+          value: "fast"  # fast, full, snap
+        - name: CACHE_SIZE
+          value: "4096"  # MB
+        - name: MAX_PEERS
+          value: "50"
+        - name: DISCOVERY_ENABLED
+          value: "true"
+        - name: NAT_ENABLED
+          value: "true"
+        - name: METRICS_ENABLED
+          value: "true"
+        - name: PPROF_ENABLED
+          value: "true"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: BOOTNODES
+          value: "enode://validator1@validator-headless:30303,enode://validator2@validator-headless:30303"
+        - name: TRUSTED_NODES
+          value: "enode://sequencer@sequencer-service:30303"
+        - name: RPC_CORS_DOMAIN
+          value: "*"
+        - name: RPC_VHOSTS
+          value: "*"
+        - name: WS_ORIGINS
+          value: "*"
+        - name: GAS_PRICE_ORACLE
+          value: "true"
+        - name: TXN_POOL_LOCALS
+          value: "0x0000000000000000000000000000000000000000"
+        - name: TXN_POOL_NO_LOCALS
+          value: "false"
+        - name: TXN_POOL_JOURNAL
+          value: "transactions.rlp"
+        - name: TXN_POOL_REJOURNAL
+          value: "1h"
+        - name: TXN_POOL_PRICE_LIMIT
+          value: "1"
+        - name: TXN_POOL_PRICE_BUMP
+          value: "10"
+        - name: TXN_POOL_ACCOUNT_SLOTS
+          value: "16"
+        - name: TXN_POOL_GLOBAL_SLOTS
+          value: "4096"
+        - name: TXN_POOL_ACCOUNT_QUEUE
+          value: "64"
+        - name: TXN_POOL_GLOBAL_QUEUE
+          value: "1024"
+        - name: TXN_POOL_LIFETIME
+          value: "3h"
+        resources:
+          requests:
+            cpu: "2"
+            memory: "8Gi"
+            storage: "200Gi"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+            storage: "500Gi"
+        volumeMounts:
+        - name: full-node-data
+          mountPath: /data
+        - name: full-node-config
+          mountPath: /config
+        - name: keystore
+          mountPath: /keystore
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /startup
+            port: 9090
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 20
+      volumes:
+      - name: full-node-data
+        persistentVolumeClaim:
+          claimName: full-node-data-pvc
+      - name: full-node-config
+        configMap:
+          name: full-node-config
+      - name: keystore
+        secret:
+          secretName: node-keystore
+          defaultMode: 0400
+      nodeSelector:
+        node-type: "compute"
+      tolerations:
+      - key: "compute"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: "role"
+                  operator: In
+                  values: ["full-node"]
+              topologyKey: "kubernetes.io/hostname"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: full-node-service
+  namespace: smart-cheques-l2
+  labels:
+    app: full-node
+spec:
+  type: LoadBalancer
+  ports:
+  - name: json-rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: websocket
+    port: 8546
+    targetPort: 8546
+    protocol: TCP
+  - name: p2p
+    port: 30303
+    targetPort: 30303
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: full-node
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: full-node-internal
+  namespace: smart-cheques-l2
+  labels:
+    app: full-node
+spec:
+  type: ClusterIP
+  ports:
+  - name: json-rpc
+    port: 8545
+    targetPort: 8545
+    protocol: TCP
+  - name: websocket
+    port: 8546
+    targetPort: 8546
+    protocol: TCP
+  selector:
+    app: full-node
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: full-node-data-pvc
+  namespace: smart-cheques-l2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard-ssd
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: full-node-config
+  namespace: smart-cheques-l2
+data:
+  genesis.json: |
+    {
+      "config": {
+        "chainId": 137,
+        "homesteadBlock": 0,
+        "eip150Block": 0,
+        "eip155Block": 0,
+        "eip158Block": 0,
+        "byzantiumBlock": 0,
+        "constantinopleBlock": 0,
+        "petersburgBlock": 0,
+        "istanbulBlock": 0,
+        "berlinBlock": 0,
+        "londonBlock": 0,
+        "clique": {
+          "period": 2,
+          "epoch": 30000
+        }
+      },
+      "difficulty": "0x1",
+      "gasLimit": "0x1c9c380",
+      "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "alloc": {}
+    }
+  
+  node.toml: |
+    [node]
+    type = "full"
+    chain_id = 137
+    network_id = 137
+    data_dir = "/data"
+    
+    [sync]
+    mode = "fast"  # fast, full, snap
+    gc_mode = "full"
+    snapshot = true
+    
+    [cache]
+    database = 768  # MB
+    trie = 256      # MB
+    gc = 25         # %
+    snapshot = 128  # MB
+    
+    [rpc]
+    http_enabled = true
+    http_host = "0.0.0.0"
+    http_port = 8545
+    http_cors_domain = ["*"]
+    http_vhosts = ["*"]
+    http_modules = ["eth", "net", "web3", "txpool", "debug"]
+    
+    ws_enabled = true
+    ws_host = "0.0.0.0"
+    ws_port = 8546
+    ws_origins = ["*"]
+    ws_modules = ["eth", "net", "web3"]
+    
+    [p2p]
+    enabled = true
+    host = "0.0.0.0"
+    port = 30303
+    max_peers = 50
+    no_discovery = false
+    discovery_v5 = true
+    nat = "any"
+    
+    [txpool]
+    locals = []
+    no_locals = false
+    journal = "transactions.rlp"
+    rejournal = "1h"
+    price_limit = 1
+    price_bump = 10
+    account_slots = 16
+    global_slots = 4096
+    account_queue = 64
+    global_queue = 1024
+    lifetime = "3h"
+    
+    [miner]
+    enabled = false
+    threads = 0
+    gas_floor = 8000000
+    gas_ceil = 8000000
+    gas_price = "1000000000"
+    recommend_commit = false
+    
+    [metrics]
+    enabled = true
+    host = "0.0.0.0"
+    port = 9090
+    
+    [pprof]
+    enabled = true
+    host = "0.0.0.0"
+    port = 6060
+    
+    [logging]
+    level = "info"
+    format = "json"
+    output = "stdout"
+    
+    [gas_price_oracle]
+    enabled = true
+    blocks = 20
+    percentile = 60
+    max_price = "500000000000"  # 500 gwei
+    ignore_price = "2000000000"  # 2 gwei
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: node-keystore
+  namespace: smart-cheques-l2
+type: Opaque
+data:
+  # Base64 encoded node private key
+  nodekey: "REPLACE_WITH_BASE64_ENCODED_NODE_PRIVATE_KEY"
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: full-node-metrics
+  namespace: smart-cheques-l2
+  labels:
+    app: full-node
+spec:
+  selector:
+    matchLabels:
+      app: full-node
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: full-node-pdb
+  namespace: smart-cheques-l2
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: full-node
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: full-node-hpa
+  namespace: smart-cheques-l2
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: full-node
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
