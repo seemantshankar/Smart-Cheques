@@ -1,0 +1,74 @@
+# Node modules
+node_modules/
+frontend/node_modules/
+src/node_modules/
+
+# Build outputs
+artifacts/
+cache/
+dist/
+build/
+frontend/dist/
+frontend/build/
+
+# TypeChain & generated code
+typechain/
+
+# Hardhat files
+cache/
+hardhat-cache/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# IDE specific
+.idea/
+.vscode/
+*.sw?
+
+# Coverage reports
+coverage/
+
+# Misc
+*.tgz
+
+# Local databases
+*.sqlite
+
+# Mac specific metadata files
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Pnpm store
+.pnpm-store/
+
+# eslint cache
+.eslintcache
+
+# Test coverage
+nyc_output/
+
+# Parcel cache
+.cache/
+
+# TernJS port file
+.tern-port
+
+# Yarn integrity file
+yarn.lock
+
+# Package lock
+package-lock.json
+frontend/package-lock.json

@@ -1,0 +1,1983 @@
+# Blockchain Core
+
+## Component Functionality
+
+- Host and execute Smart Cheque smart contracts with on-chain enforcement of obligations.
+- Provide a scalable, secure, low-cost settlement layer for locking, releasing, and auditing funds.
+- Ensure immutability, transparency, and finality of transaction records.
+- Support interoperability with other chains (bridges) and on-chain oracles.
+- Expose RPC/REST/WebSocket endpoints for platform services and external integrators.
+
+## Technical Architecture
+
+### A. Network Layer
+
+- Choice of Layer-2 rollup or high-throughput chain (e.g., Polygon PoS, Optimism, Arbitrum, Solana, Avalanche).
+- Validator/Sequencer set (delegated or permissioned) for block proposal and consensus.
+- Bridge modules for transferring stablecoins and native tokens between Layer-1 (Ethereum) and Layer-2.
+
+### B. Consensus & Security
+
+- Consensus algorithm (e.g., optimistic rollup fraud proofs, zk-rollup validity proofs, or Tendermint-style PoS).
+- On-chain governance contracts for protocol upgrades and validator management.
+- Slashing and staking mechanics (if PoS) to ensure honest validator behavior.
+- Transaction finality guarantees (e.g., < 1 minute for rollups, sub-second for Solana).
+
+### C. Smart Contract Layer
+
+- Core smart contract suite written in Solidity/Rust:
+    - **SmartChequeFactory:** deploys new Smart Cheque instances.
+    - **SmartChequeEscrow:** manages locked funds, milestone states, and dispute flags.
+    - **ObligationRegistry:** stores encoded obligations and mappings to on-chain oracles.
+    - **DisputeManager:** enforces dispute resolution hooks and escalation paths.
+- Upgradeable proxy pattern to allow future contract improvements.
+
+### D. Node & API Infrastructure
+
+- Full nodes and archive nodes for data availability and historical queries.
+- Indexer services (e.g., The Graph) to surface Smart Cheque events and statuses.
+- RPC gatekeepers with rate limiting, authentication, and TLS termination.
+- RESTful microservices layer translating on-chain data to the application domain model.
+
+### E. Interoperability & Oracles
+
+- Cross-chain bridge contracts for token transfers and state proofs.
+- Oracle adapters (Chainlink, Band Protocol, custom) for external milestone verification.
+- On-chain event listeners triggering off-chain AI/compliance workflows via secure webhooks.
+
+### F. Security & Operations
+
+- Node logs (JSON-structured)
+- Metrics (Prometheus) for block/tx latencies and error rates
+- Alerting (e.g., PagerDuty) on critical node or sequencer failures
+
+# Blockchain Core Detailed Architecture Document
+
+## 1. Introduction
+
+The Blockchain Core is the foundational layer of the Smart Cheque platform, responsible for secure, transparent, and auditable on-chain execution of payment instruments. This document describes its architectural components, data flows, interfaces, and non-functional requirements.
+
+## 2. Goals & Requirements
+
+### 2.1 Functional Requirements
+
+- Deploy and execute Smart Cheque smart contracts
+- Lock, release, and escrow funds based on verified milestones
+- Record immutable transaction histories with on-chain finality
+- Provide cross-chain token bridging
+- Expose RPC/REST/WebSocket APIs for services and integrators
+
+### 2.2 Non-Functional Requirements
+
+- Scalability: support thousands of txs per second (TPS)
+- Security: strong on-chain guarantees, validator slashing, oracle integrity
+- Availability: ≥ 99.9% uptime for RPC endpoints and nodes
+- Cost-efficiency: minimal gas and operational overhead
+- Upgradeability: support protocol evolution via governance
+
+## 3. High-Level Architecture
+
+```
+┌──────────────┐        ┌───────────────┐        ┌───────────────┐
+│   Clients    │  <───> │ API & Gateway │  <───> │   Blockchain  │
+│ (Web/Mobile) │        │  Layer (REST, │        │   Network     │
+│              │        │   WebSocket)  │        │ (L2 Rollup,   │
+│              │        │               │        │  PoS Chain)   │
+└──────────────┘        └───────────────┘        └───────────────┘
+                                    │                  │
+                                    ▼                  │
+                         ┌──────────────────┐          │
+                         │ Indexer & Cache  │◀─────────┘
+                         └──────────────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────┐
+                         │ Security &       │
+                         │ Operations       │
+                         └──────────────────┘
+```
+
+## 4. Component Breakdown
+
+### 4.1 Network Layer
+
+- **Chain Selection**: Polygon PoS, Optimism, Arbitrum, Solana, or Avalanche
+- **Nodes**:
+    - Validator/Sequencer nodes (block production)
+    - Full nodes (state validation)
+    - Archive nodes (historical data)
+- **Bridges**:
+    - ERC-20 and native token bridge contracts
+    - Relayer services for cross-chain proofs
+
+### 4.2 Consensus & Governance
+
+- **Consensus Mechanism**:
+    - Optimistic Rollup with fraud proofs or
+    - zk-Rollup with validity proofs or
+    - PoS (Tendermint style)
+- **Governance Contracts**:
+    - Protocol upgrade proposals
+    - Validator staking/slashing rules
+- **Security**:
+    - Slashing on double-signing or downtime
+    - Timelocked upgrade paths
+
+### 4.3 Smart Contract Suite
+
+### Core Smart Contracts
+
+1. **SmartChequeFactory**
+    - Deploys new Smart Cheque instances
+    - Records creator, parties, and metadata
+    - Emits ChequeCreated events
+2. **SmartChequeEscrow**
+    - Manages locked funds (stablecoins/native tokens)
+    - Tracks milestone states: Pending, Approved, Disputed, Released
+    - Handles fund releases and refunds
+    - Emits state transition events (FundsLocked, FundsReleased)
+3. **ObligationRegistry**
+    - Stores hashed obligations and oracle feed pointers
+    - Maps contractual obligations to on-chain verifiable conditions
+    - Provides oracle adapters with on-chain reference points
+4. **DisputeManager**
+    - Manages multi-tiered dispute resolution lifecycle
+    - Enforces escalation paths (AI → stakeholder → human arbitration)
+    - Executes resolution outcomes (fund release/refund)
+    - Emits DisputeOpened/DisputeResolved events
+5. **Proxy System** (Beacon/Transparent Proxy)
+    - Upgradeability mechanism for all core contracts
+    - UUPS pattern with _authorizeUpgrade restricted to ADMIN_ROLE
+    - Timelock-controlled upgrade execution
+
+### L2 Infrastructure Contracts
+
+1. **RollupChain (L1 Mainnet Contract)**
+    - Batch submission interface for sequencers
+    - State root commitments
+    - Fraud proof verification system
+2. **FraudVerifier**
+    - Validates fraud proofs during challenge periods
+    - Executes slashing conditions for invalid state transitions
+    - Manages bond penalties for sequencers
+3. **SequencerManager**
+    - Handles sequencer registration and bonding
+    - Implements Raft-based leader election
+    - Enforces liveness requirements and slashing
+
+### Cross-Chain Contracts
+
+1. **L1 BridgeContract**
+    - Asset locking mechanism on Ethereum mainnet
+    - Merkle root emission for cross-chain proofs
+    - Reorg-safe event emission
+2. **L2Token (L2 Rollup)**
+    - Wrapped asset representation on L2
+    - Mint/burn functionality tied to bridge operations
+    - Implements ERC-20 with extra metadata for origin chain
+
+### Oracle Integration Contracts
+
+1. **FinalityOracle**
+    - Tracks chain finality status
+    - Provides settlement finality guarantees
+    - Enforces block confirmation requirements
+2. **OracleAdapter**
+    - Standardized interface for Chainlink/Band/custom oracles
+    - Quorum-based result validation
+    - Fallback source management
+
+### Key Characteristics Across All Contracts
+
+- **Upgradeability**: All contracts use proxy patterns with admin-restricted upgrades
+- **Access Control**: Role-based permissions (OWNER_ROLE, ADMIN_ROLE, ORACLE_ROLE)
+- **Security**: Slither/MythX verified, formal verification for core state machines
+- **Gas Optimization**: Batch processing, unchecked math, and packed storage
+- **Event Emission**: Comprehensive event logging for off-chain indexing
+
+### 4.4 API & Gateway Layer
+
+- **RPC Endpoints**:
+    - EthJSON-RPC for client wallets and services
+- **REST/WebSocket**:
+    - Abstract common workflows: `POST /smartcheque/create`
+    - Subscribe to events: `ws://…/events`
+- **Authentication & Rate-Limiting**
+    - JWT/API-Key based access
+    - Per-key rate quotas
+
+### 4.5 Indexer & Cache
+
+- **Event Listener**
+    - Subscribes to on-chain events (ChequeCreated, MilestoneCompleted, DisputeOpened)
+- **Data Store**
+    - PostgreSQL for relational queries
+    - Redis for real-time status caching
+- **GraphQL/REST API**
+    - Expose enriched domain data to UI and integrators
+
+### 4.6 Security & Operations
+
+- **Node Logs**
+    - JSON-structured logs for block production, RPC requests, and errors
+- **Metrics Collection**
+    - Prometheus for block/tx latencies, error rates, and node health
+- **Alerting**
+    - PagerDuty or Opsgenie for critical failures (e.g., stalled blocks, high error rates)
+
+## 5. Data Flow
+
+```mermaid
+flowchart TD
+    A[User] -->|1. Request Smart Cheque creation| B[REST API]
+    B -->|2. Sign & forward transaction| C[Sequencer Node]
+    C -->|3a. Batch transactions| D[L2 Block]
+    C -->|3b. Generate proofs| E[L1 Blockchain]
+    D -->|4. Emit event| F["SmartChequeFactory: ChequeCreated"]
+    F -->|5.1 Ingest event| G[Indexer]
+    G -->|5.2 Update| H[(Relational DB)]
+    G -->|5.3 Cache| I[Redis Status Cache]
+    J[Oracles & AI Agents] -->|6.1 Monitor| K[Off-chain Milestone Feeds]
+    K -->|6.2 Verify milestone| J
+    J -->|6.3 Invoke releaseFunds| L["SmartChequeEscrow: releaseFunds(milestoneId)"]
+    L -->|7.1 Validate request| M[Token Validation]
+    M -->|7.2 Transfer tokens| N[Beneficiary Wallet]
+    style A fill:#9cf,stroke:#333,stroke-width:1px,color:#000
+		style N fill:#9cf,stroke:#333,stroke-width:1px,color:#000
+    style E stroke-dasharray: 5 5
+    style K stroke-dasharray: 5 5
+
+    subgraph Blockchain
+        E
+        F
+        L
+    end
+    
+    subgraph Off-chain Systems
+        H
+        I
+        J
+        K
+    end
+```
+
+1. User requests Smart Cheque creation via REST API.
+2. API layer signs and forwards the transaction to a sequencer node.
+3. Sequencer batches the tx into an L2 block; zk/optimistic proofs update L1 periodically.
+4. SmartChequeFactory emits a `ChequeCreated` event.
+5. Indexer ingests event, updates relational DB, caches status.
+6. Oracles and AI agents monitor off-chain milestone feeds; on verification, they invoke `releaseFunds(milestoneId)`.
+7. SmartChequeEscrow validates and transfers tokens to the beneficiary.
+8. All state transitions are recorded on-chain for audit.
+
+## 6. Security Considerations
+
+- Leverage formal verification (e.g., Slither, MythX) on smart contracts.
+- Enforce multisig or time-lock on governance upgrades.
+- Harden RPC nodes behind authenticated proxies.
+- Use decentralized oracle networks to prevent single-source oracle manipulation.
+- Conduct periodic security audits and bug bounty programs.
+
+## 7. Scalability & Performance
+
+- Aggregate transactions in rollup batches for high TPS (1,000–5,000 TPS).
+- Horizontal scale RPC and indexer layers behind load balancers.
+- Use read replicas for PostgreSQL to offload analytics queries.
+- Shard or partition database by tenant or geography if needed.
+
+## 8. Deployment & CI/CD
+
+- Infrastructure as Code (Terraform) for node provisioning and network.
+- Dockerized node, indexer, and API services.
+- GitHub Actions or Jenkins pipelines for:
+    - Smart contract compilation and testing
+    - Docker image builds and security scans
+    - Automated deployment to staging and production
+
+## 9. Roadmap & Future Enhancements
+
+- Expand to multi-chain support with automated chain-selection logic.
+- Integrate zk-proofs for on-chain privacy of obligation data.
+- Deploy a fully decentralized sequencer network.
+- Implement gas-fee abstraction (meta-transactions) for UX.
+
+---
+
+# Blockchain Core Data Flow Document
+
+## 1. Introduction
+
+This document outlines the detailed data flow, database architecture, and state management for the Blockchain Core component of the Smart Cheque platform. It describes how data moves through the system, the database schema, and the various states that sub-components can assume.
+
+## 2. Key Components Involved
+
+- **Clients**: Web and mobile applications interacting with the platform.
+- **API & Gateway Layer**: REST and WebSocket endpoints for user and service interactions.
+- **Blockchain Network**: Layer-2 rollup or high-throughput chain (e.g., Polygon PoS, Optimism).
+- **Indexer & Cache**: Off-chain service for indexing on-chain events and caching statuses.
+- **Security & Operations**: Monitoring and alerting for node health and performance.
+
+## 3. Data Flow Overview
+
+The data flow can be divided into the following stages:
+
+1. **Smart Cheque Creation**
+2. **Milestone Verification & Fund Release**
+3. **Dispute Handling**
+4. **Monitoring & Alerts**
+
+## 4. Detailed Data Flow
+
+### 4.1 Smart Cheque Creation
+
+1. **User Request**:
+    - A user (e.g., a buyer) initiates a Smart Cheque creation via the platform’s REST API (`POST /smartcheque/create`).
+    - The request includes:
+        - Parties involved (buyer, seller)
+        - Contract terms (milestones, payment amounts)
+        - Stablecoin or native token details
+2. **API Processing**:
+    - The API layer validates the request, performs authentication, and constructs a transaction payload.
+    - The payload is signed using the platform’s private key and forwarded to a sequencer node.
+3. **On-Chain Execution**:
+    - The sequencer node batches the transaction into a block and submits it to the blockchain network.
+    - The `SmartChequeFactory` contract deploys a new `SmartChequeEscrow` instance, emitting a `ChequeCreated` event.
+4. **Indexing & Caching**:
+    - The Indexer listens for the `ChequeCreated` event, extracts relevant data, and updates the PostgreSQL database.
+    - The Smart Cheque status is cached in Redis for real-time access.
+5. **User Notification**:
+    - The API layer notifies the user (via WebSocket or REST response) that the Smart Cheque has been created.
+
+### 4.2 Milestone Verification & Fund Release
+
+1. **Milestone Completion**:
+    - The seller completes a milestone (e.g., delivers goods) and submits proof (e.g., logistics tracking ID).
+2. **Oracle Verification**:
+    - An AI agent or oracle service verifies the milestone by querying external systems (e.g., logistics APIs).
+    - Upon verification, the oracle invokes the `releaseFunds(milestoneId)` function on the `SmartChequeEscrow` contract.
+3. **On-Chain Execution**:
+    - The `SmartChequeEscrow` contract validates the request and transfers the locked funds to the seller’s wallet.
+    - A `FundsReleased` event is emitted.
+4. **Indexing & Caching**:
+    - The Indexer updates the database and cache with the new Smart Cheque status.
+5. **User Notification**:
+    - Both parties are notified of the fund release via WebSocket or email.
+
+### 4.3 Dispute Handling
+
+1. **Dispute Initiation**:
+    - A party initiates a dispute by calling the `openDispute(chequeId, reason)` function on the `DisputeManager` contract.
+    - A `DisputeOpened` event is emitted.
+2. **AI-Mediated Resolution**:
+    - The AI agent analyzes the dispute, cross-references contract terms and real-world data, and attempts to resolve it automatically.
+    - If resolved, the AI invokes the appropriate contract function (e.g., `releaseFunds` or `refundBuyer`).
+3. **Stakeholder Escalation**:
+    - If the AI cannot resolve the dispute, both parties submit justifications via the platform.
+    - The platform enforces pre-agreed fallback mechanisms (e.g., arbitration fees, renegotiation).
+4. **Third-Party Arbitration**:
+    - For unresolved disputes, the platform connects certified mediators or arbitration bodies.
+    - The arbitrator reviews on-chain data and off-chain evidence to make a final decision.
+5. **On-Chain Execution**:
+    - The arbitrator’s decision is executed via the `DisputeManager` contract, emitting a `DisputeResolved` event.
+6. **Indexing & Caching**:
+    - The Indexer updates the database and cache with the dispute resolution status.
+7. **User Notification**:
+    - Both parties are notified of the resolution outcome.
+
+### 4.4 Monitoring & Alerts
+
+1. **Node Health Monitoring**:
+    - Prometheus collects metrics (block latency, peer count, error rates) from validator and full nodes.
+    - Grafana dashboards provide real-time visibility into node health.
+2. **API Performance Monitoring**:
+    - API gateways log request latencies, error rates, and throughput.
+    - Alerts are triggered for high error rates or degraded performance.
+3. **Alerting**:
+    - Critical failures (e.g., stalled blocks, high error rates) trigger alerts via PagerDuty or Opsgenie.
+    - Notifications are sent to the operations team for immediate action.
+
+## 5. Database Architecture
+
+### 5.1 Database Schema
+
+The database schema defines the structure for storing and managing data related to Smart Cheques, milestones, disputes, and events. It has been extended to include future-proofing elements, such as an audit log table for tracking changes and considerations for hybrid data storage (e.g., combining SQL with NoSQL for unstructured data).
+
+### 5.1.1 Smart Cheques Table
+
+```sql
+CREATE TABLE smart_cheques (
+    id SERIAL PRIMARY KEY,
+    cheque_id VARCHAR(64) UNIQUE NOT NULL,
+    buyer_address VARCHAR(42) NOT NULL,
+    seller_address VARCHAR(42) NOT NULL,
+    total_amount NUMERIC(18, 8) NOT NULL,
+    released_amount NUMERIC(18, 8) DEFAULT 0,
+    is_disputed BOOLEAN DEFAULT FALSE,
+    is_completed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+```
+
+### 5.1.2 Milestones Table
+
+```sql
+CREATE TABLE milestones (
+    id SERIAL PRIMARY KEY,
+    cheque_id VARCHAR(64) NOT NULL,
+    amount NUMERIC(18, 8) NOT NULL,
+    description TEXT,
+    is_completed BOOLEAN DEFAULT FALSE,
+    completed_at TIMESTAMP,
+    FOREIGN KEY (cheque_id) REFERENCES smart_cheques(cheque_id)
+);
+
+```
+
+### 5.1.3 Disputes Table
+
+```sql
+CREATE TABLE disputes (
+    id SERIAL PRIMARY KEY,
+    cheque_id VARCHAR(64) NOT NULL,
+    initiator_address VARCHAR(42) NOT NULL,
+    reason TEXT,
+    status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, RESOLVED, ESCALATED
+    resolution TEXT,
+    resolved_at TIMESTAMP,
+    FOREIGN KEY (cheque_id) REFERENCES smart_cheques(cheque_id)
+);
+
+```
+
+### 5.1.4 Events Table
+
+```sql
+CREATE TABLE events (
+    id SERIAL PRIMARY KEY,
+    cheque_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(50) NOT NULL, -- ChequeCreated, FundsReleased, DisputeOpened, etc.
+    event_data JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (cheque_id) REFERENCES smart_cheques(cheque_id)
+);
+
+```
+
+### 5.1.5 Extended Data Modeling for Future Extensions
+
+To support future enhancements, the schema includes an `audit_logs` table for tracking changes to critical data. Additionally, for unstructured or evolving data (e.g., `event_data`), a hybrid approach using NoSQL databases like MongoDB can be integrated for flexibility.
+
+```sql
+CREATE TABLE audit_logs (
+    id SERIAL PRIMARY KEY,
+    table_name VARCHAR(50) NOT NULL,
+    record_id VARCHAR(64) NOT NULL,
+    action VARCHAR(10) NOT NULL,  -- INSERT, UPDATE, DELETE
+    changed_by VARCHAR(42),
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    details JSONB  -- Stores additional context, e.g., before/after values
+);
+
+```
+
+### 5.2 Indexes
+
+Indexes are implemented to optimize query performance. This section has been enhanced to include advanced indexing techniques and tools for query optimization.
+
+```sql
+CREATE INDEX idx_smart_cheques_buyer ON smart_cheques(buyer_address);
+CREATE INDEX idx_smart_cheques_seller ON smart_cheques(seller_address);
+CREATE INDEX idx_milestones_cheque ON milestones(cheque_id);
+CREATE INDEX idx_disputes_cheque ON disputes(cheque_id);
+CREATE INDEX idx_events_cheque ON events(cheque_id);
+CREATE INDEX idx_smart_cheques_combined ON smart_cheques(buyer_address, created_at);  -- Composite index for frequent queries
+CREATE INDEX idx_milestones_description ON milestones USING GIN(to_tsvector('english', description));  -- Full-text index for description field
+
+```
+
+Query optimization tools like PostgreSQL's `EXPLAIN` and `pgBadger` should be used to analyze and refine query plans for high-traffic operations.
+
+### 5.3 Data Consistency and Synchronization
+
+To ensure data consistency between on-chain events, the PostgreSQL database, and Redis cache, implement event-driven synchronization mechanisms. For example, use tools like Apache Kafka or RabbitMQ to stream events from the Indexer to the database and cache. This handles real-time updates and resolves conflicts during high-volume scenarios:
+
+- **Synchronization Process**: The Indexer publishes events (e.g., `ChequeCreated`) to a message queue. Subscribers update the database and invalidate/rebuild cache entries in Redis.
+- **Conflict Resolution**: Use idempotent operations (e.g., UPSERT in PostgreSQL) to handle duplicates and ensure atomic updates.
+
+### 5.4 Data Encryption and Access Controls
+
+Enhance data security by implementing field-level encryption and role-based access controls (RBAC). Use PostgreSQL extensions like `pgcrypto` for encrypting sensitive fields (e.g., addresses).
+
+- **Encryption**: Encrypt columns such as `buyer_address` and `seller_address` using AES encryption:
+    
+    ```sql
+    ALTER TABLE smart_cheques ADD COLUMN buyer_address_encrypted BYTEA;
+    UPDATE smart_cheques SET buyer_address_encrypted = pgp_sym_encrypt(buyer_address, 'encryption_key');
+    
+    ```
+    
+- **Access Controls**: Define RBAC roles, such as:
+    - `admin_role`: Full access for system administrators.
+    - `read_only_role`: Limited to SELECT queries for auditors.
+    - Enforce with: `GRANT SELECT ON smart_cheques TO read_only_role;`
+
+### 5.5 Database Scalability and Sharding
+
+To handle large-scale data growth, implement scalability strategies such as sharding and horizontal partitioning.
+
+- **Sharding Strategies**: Shard tables like `smart_cheques` by attributes (e.g., `cheque_id` or `created_at`) using PostgreSQL extensions like Citus. For example:
+    - Horizontal sharding: Distribute data across multiple nodes based on `cheque_id` ranges.
+    - Tools: Use Citus for distributed tables: `SELECT create_distributed_table('smart_cheques', 'cheque_id');`
+- **Horizontal Scaling**: Deploy read replicas for query-intensive tables and use load balancers to distribute write operations.
+
+### 5.6 Caching with Redis
+
+- **Key Structure**:
+    - `smart_cheque:{cheque_id}`: Stores the current status of a Smart Cheque.
+    - `milestones:{cheque_id}`: Stores the list of milestones for a Smart Cheque.
+    - `disputes:{cheque_id}`: Stores the current dispute status for a Smart Cheque.
+- **Cache Invalidation**:
+    - Cache entries are invalidated and updated whenever a relevant on-chain event is detected (e.g., `FundsReleased`, `DisputeResolved`).
+
+### 5.7 Data Retention & Archiving
+
+- **Retention Policy**:
+    - Smart Cheques and related data are retained for **7 years** for audit and compliance purposes.
+    - Archived data is moved to cold storage (e.g., AWS S3 Glacier) after 1 year.
+- **Backup Strategy**:
+    - Daily backups of the PostgreSQL database are stored in a secure, encrypted S3 bucket.
+    - Point-in-time recovery (PITR) is enabled for critical tables.
+
+## 6. State Management
+
+### 6.1 Smart Cheque States
+
+- **CREATED**: The Smart Cheque has been deployed on-chain but no funds have been locked yet.
+- **FUNDS_LOCKED**: The buyer has locked funds in the Smart Cheque escrow.
+- **MILESTONE_PENDING**: A milestone is awaiting verification.
+- **MILESTONE_COMPLETED**: A milestone has been verified, and funds have been released.
+- **DISPUTED**: A dispute has been initiated for the Smart Cheque.
+- **COMPLETED**: All milestones have been completed, and all funds have been released.
+- **CANCELLED**: The Smart Cheque has been cancelled, and funds have been refunded to the buyer.
+
+### 6.2 Milestone States
+
+- **PENDING**: The milestone is awaiting completion.
+- **COMPLETED**: The milestone has been completed and verified.
+- **DISPUTED**: The milestone is under dispute.
+
+### 6.3 Dispute States
+
+- **OPEN**: The dispute has been initiated but not yet resolved.
+- **RESOLVED**: The dispute has been resolved automatically by AI or through stakeholder agreement.
+- **ESCALATED**: The dispute has been escalated to third-party arbitration.
+
+### 6.4 Event States
+
+- **ChequeCreated**: Emitted when a Smart Cheque is created.
+- **FundsLocked**: Emitted when funds are locked in the escrow.
+- **FundsReleased**: Emitted when funds are released for a milestone.
+- **DisputeOpened**: Emitted when a dispute is initiated.
+- **DisputeResolved**: Emitted when a dispute is resolved.
+- **ChequeCompleted**: Emitted when all milestones are completed.
+- **ChequeCancelled**: Emitted when the Smart Cheque is cancelled.
+
+## 7. Data Flow Diagram
+
+```
+┌──────────────┐        ┌───────────────┐        ┌───────────────┐
+│   Clients    │  <───> │ API & Gateway │  <───> │   Blockchain  │
+│ (Web/Mobile) │        │  Layer (REST, │        │   Network     │
+│              │        │   WebSocket)  │        │ (L2 Rollup,   │
+│              │        │               │        │  PoS Chain)   │
+└──────────────┘        └───────────────┘        └───────────────┘
+                                │                        │
+                                ▼                        │
+                        ┌──────────────────┐             │
+                        │ Indexer & Cache  │◀────────────┘
+                        └──────────────────┘
+                                │
+                                ▼
+                        ┌──────────────────┐
+                        │ Security &       │
+                        │ Operations       │
+                        └──────────────────┘
+
+```
+
+## 8. Smart Cheque Blockchain Core API Documentation
+
+**Base URLs**
+
+- REST: `https://api.smartcheque.example.com/v1`
+- WebSocket: `wss://api.smartcheque.example.com/v1/events`
+
+**Authentication**
+
+- Header: `Authorization: Bearer {jwt_token}`
+- JWTs signed with RS256; public keys at `GET /.well-known/jwks.json`
+- OAuth2 token introspection: `POST /oauth2/introspect`
+- Required scopes: `cheque:create`, `cheque:read`, `cheque:update`, `dispute:read`, `dispute:write`
+
+**Common Response Headers**
+
+- `X-Request-ID`: UUID for tracing
+- `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `Retry-After`
+- Echoed `Idempotency-Key` on write endpoints
+
+**Error Model**
+
+```json
+{
+  "error": {
+    "code": "string",
+    "message": "string",
+    "details": { /* optional structured info */ }
+  }
+}
+
+```
+
+---
+
+## 8.1. Health & Metrics
+
+### GET /healthz
+
+- Returns overall service health and downstream dependencies
+- 200 OK
+
+```json
+{
+  "status": "ok",
+  "dependencies": {
+    "db": "ok",
+    "indexer": "ok",
+    "node": "ok"
+  }
+}
+
+```
+
+### GET /ready
+
+- Readiness probe: 200 if ready, 503 otherwise
+
+### GET /metrics
+
+- Prometheus-formatted metrics
+
+### GET /trace/{requestId}
+
+- Fetch distributed trace by `X-Request-ID`
+
+---
+
+## 8.2. Smart Cheque Endpoints
+
+### 8.2.1 Create Smart Cheque
+
+**POST** `/smartcheques`
+
+- Headers: `Idempotency-Key`
+- Body:
+    
+    ```json
+    {
+      "buyerAddress": "0xabc…",
+      "sellerAddress": "0xdef…",
+      "stablecoin": "USDC",
+      "totalAmount": "1000.00",
+      "milestones": [
+        { "id": "m1", "amount": "400.00", "description": "Design sign-off" },
+        { "id": "m2", "amount": "600.00", "description": "Final delivery" }
+      ],
+      "expiration": "2025-12-31T23:59:59Z",
+      "metadata": { /* free-form JSON */ }
+    }
+    
+    ```
+    
+- Responses:
+    - **201 Created**
+        
+        ```json
+        {
+          "chequeId": "SCQ-0x12345…",
+          "factoryTxHash": "0xabc…",
+          "status": "CREATED",
+          "createdAt": "2025-08-02T14:00:00Z"
+        }
+        
+        ```
+        
+    - **400** INVALID_INPUT
+    - **401** UNAUTHORIZED
+
+### 8.2.2 Get Smart Cheque Details
+
+**GET** `/smartcheques/{chequeId}`
+
+- Response **200 OK**: full cheque object (see Common Models)
+- **404** NOT_FOUND
+- **401** UNAUTHORIZED
+
+### 8.2.3 List Smart Cheques
+
+**GET** `/smartcheques?page=1&limit=20&buyer=0x…&status=FUNDS_LOCKED`
+
+- Response **200 OK**:
+    
+    ```json
+    {
+      "items": [ /* SmartChequeSummary */ ],
+      "page": 1,
+      "limit": 20,
+      "total": 123
+    }
+    
+    ```
+    
+- Link header for pagination:`Link: <...&page=2>; rel="next"`
+
+### 8.2.4 Lock Funds
+
+**POST** `/smartcheques/{chequeId}/lock`
+
+- Headers: `Idempotency-Key`
+- Body:
+    
+    ```json
+    { "fromAddress": "0xabc…" }
+    
+    ```
+    
+- Response **200 OK**:
+    
+    ```json
+    { "txHash": "0xlockTxHash…", "status": "FUNDS_LOCKED" }
+    
+    ```
+    
+- **402** PAYMENT_REQUIRED
+- **403** FORBIDDEN
+- **409** CONFLICT
+
+### 8.2.5 Release Funds on Milestone
+
+**POST** `/smartcheques/{chequeId}/milestones/{milestoneId}/release`
+
+- Headers: `Idempotency-Key`
+- Body:
+    
+    ```json
+    { "oracleProof": { /* proof payload */ } }
+    ```
+    
+- Response **200 OK**:
+    
+    ```json
+    { "txHash": "0xreleaseTx…", "milestoneState": "COMPLETED" }
+    ```
+    
+- **400** INVALID_INPUT
+- **403** FORBIDDEN
+- **409** CONFLICT
+
+### 8.2.6 Open Dispute
+
+**POST** `/smartcheques/{chequeId}/dispute`
+
+- Headers: `Idempotency-Key`
+- Body:
+    
+    ```json
+    {
+      "initiator": "0xdef…",
+      "reason": "Shipment delayed beyond SLA",
+      "evidence": { /* attachments or links */ }
+    }
+    ```
+    
+- Response **201 Created**:
+    
+    ```json
+    {
+      "disputeId": "D-0x789…",
+      "status": "OPEN",
+      "openedAt": "2025-08-02T16:00:00Z"
+    }
+    ```
+    
+- **403** FORBIDDEN
+- **409** CONFLICT
+
+---
+
+## 8.3. Dispute Endpoints
+
+### 8.3.1 Get Dispute Details
+
+**GET** `/disputes/{disputeId}`
+
+- Response **200 OK**: full dispute object
+- **404** NOT_FOUND
+- **401** UNAUTHORIZED
+
+### 8.3.2 List Disputes
+
+**GET** `/disputes?page=1&limit=20&status=OPEN&chequeId=…`
+
+- Response **200 OK**: pagination model
+
+### 8.3.3 Resolve Dispute
+
+**POST** `/disputes/{disputeId}/resolve`
+
+- Headers: `Idempotency-Key`
+- Body:
+    
+    ```json
+    {
+      "resolver": "AI_AGENT" | "HUMAN_ARBITRATOR",
+      "decision": "REFUND_BUYER" | "RELEASE_FUNDS",
+      "notes": "Verified proof shows delivery was on time"
+    }
+    ```
+    
+- Response **200 OK**:
+    
+    ```json
+    {
+      "disputeId": "D-0x789…",
+      "status": "RESOLVED",
+      "resolvedAt": "2025-08-03T10:00:00Z"
+    }
+    ```
+    
+- **400** INVALID_DECISION
+- **409** CONFLICT
+
+---
+
+## 8.4. Webhooks (Outbound)
+
+### POST /webhooks/cheque-events
+
+- Register callback URL for HMAC-signed event notifications
+- Body:
+    
+    ```json
+    {
+      "url": "<https://example.com/webhook>",
+      "secret": "supersecret",
+      "events": [
+        "ChequeCreated",
+        "FundsLocked",
+        "FundsReleased",
+        "DisputeOpened",
+        "DisputeResolved"
+      ]
+    }
+    ```
+    
+- Header: `X-Hub-Signature` (HMAC SHA256)
+
+### DELETE /webhooks/{webhookId}
+
+- Remove subscription
+
+---
+
+## 8.5. WebSocket Events
+
+**Connect** to `wss://api.smartcheque.example.com/v1/events`
+
+### Subscribe
+
+```json
+{
+  "type": "subscribe",
+  "topics": ["ChequeCreated","FundsReleased","DisputeOpened","DisputeResolved"]
+}
+```
+
+### Unsubscribe
+
+```json
+{
+  "type": "unsubscribe",
+  "topics": ["FundsReleased"]
+}
+```
+
+### Server Push
+
+```json
+{
+  "topic": "FundsReleased",
+  "payload": {
+    "chequeId": "SCQ-…",
+    "milestoneId": "m1",
+    "txHash": "0x…",
+    "timestamp": "2025-08-02T15:00:00Z"
+  }
+}
+```
+
+---
+
+## 8.6. Common Models & Schemas
+
+All JSON schemas are published at:
+
+`https://api.smartcheque.example.com/v1/schemas/`
+
+- **SmartChequeSummary**
+- **SmartChequeDetail**
+- **Milestone**
+- **Dispute**
+- **Pagination**
+
+---
+
+## 8.7. Pagination & Filters
+
+- Supports page/limit or cursor-based
+- `Link` header per RFC 5988 (`rel="next"`, `rel="prev"`)
+- `includeCount=true` to return `total` in body
+
+---
+
+## 8.8. Client SDK & OpenAPI
+
+- OpenAPI v3 spec: `https://api.smartcheque.example.com/v1/openapi.json`
+- Official SDKs: JavaScript, Python, Go (GitHub)
+
+---
+
+## 8.9. CORS & Security Headers
+
+- CORS: configurable allowed origins, methods, headers
+- Enforce HSTS, Content-Security-Policy
+- TLS mandatory on all endpoints
+
+---
+
+## 8.10. Versioning & Deprecation
+
+- API version in URL (`/v1/`) and Accept header:`Accept: application/vnd.smartcheque.v1+json`
+- Breaking changes announced 90 days in advance
+
+---
+
+## 8.11. Throttling & Quotas
+
+- Default: 100 requests/sec per API key
+- Burst up to 200 requests
+- 429 Too Many Requests on exceed
+
+---
+
+## 9. Smart Contract Design & Security
+
+This section details the on–chain contract architecture for the Blockchain Core component, including module breakdown, interfaces, upgradeability, security analyses, and gas‐optimization.
+
+### 9.1 Module Breakdown
+
+1. **SmartChequeFactory**
+    - Responsibilities
+    • Deploy new `SmartChequeEscrow` instances
+    • Record registry of all deployed cheque addresses
+    • Emit `ChequeCreated` events
+    - Key Functions
+    • `createSmartCheque(buyer, seller, token, totalAmount, milestones, expiration, metadata) → chequeAddress`
+    • `getAllCheques() → address[]`
+    - Events
+    • `event ChequeCreated(address indexed cheque, address indexed buyer, address indexed seller)`
+2. **SmartChequeEscrow**
+    - Responsibilities
+    • Lock stablecoins in escrow
+    • Track milestone states (`Pending`, `Completed`, `Disputed`, `Released`)
+    • Release funds upon milestone verification
+    • Handle dispute flags and refunds
+    - Key Functions
+    • `lockFunds()` (caller = buyer)
+    • `releaseFunds(uint256 milestoneId, bytes oracleProof)`
+    • `openDispute(string reason)`
+    • `resolveDispute(bool releaseFundsToSeller)`
+    - Events
+    • `FundsLocked(address indexed buyer, uint256 amount)`
+    • `FundsReleased(uint256 indexed milestoneId, uint256 amount)`
+    • `DisputeOpened(address indexed initiator, string reason)`
+    • `DisputeResolved(address resolver, bool released)`
+3. **ObligationRegistry**
+    - Responsibilities
+    • Store obligation hashes and pointers to oracle feeds
+    • Allow lookup of obligations by cheque and milestone
+    - Key Functions
+    • `registerObligation(address cheque, uint256 milestoneId, bytes32 obligationHash, address oracleFeed)`
+    • `getObligation(address cheque, uint256 milestoneId) → (bytes32, address)`
+4. **DisputeManager**
+    - Responsibilities
+    • Centralize multi‐tier dispute logic across all cheques
+    • Enforce escalation paths (AI, stakeholder, human arbitrator)
+    • Record dispute lifecycle
+    - Key Functions
+    • `escalateDispute(address cheque, uint256 disputeId)`
+    • `applyResolution(address cheque, uint256 disputeId, bool releaseToSeller)`
+    - Events
+    • `DisputeEscalated(address indexed cheque, uint256 indexed disputeId)`
+    • `DisputeResolved(address indexed cheque, uint256 indexed disputeId, bool released)`
+
+---
+
+### 9.2 Interface Specs & Access Controls
+
+### 9.2.1 Interfaces
+
+All contracts implement clean interfaces (`ISmartChequeFactory`, `ISmartChequeEscrow`, etc.) defined in `contracts/interfaces/`. This enables easy mocking and upgrade.
+
+### 9.2.2 Roles & Ownership
+
+- **Ownable (OpenZeppelin)**
+• `owner` can update critical parameters, pause/unpause contracts
+- **AccessControl (OpenZeppelin)**
+• Role `ADMIN_ROLE` for governance actions (e.g. upgrading, oracle registration)
+• Role `ORACLE_ROLE` allowed to call `releaseFunds(...)`
+- **Upgradeable Proxy (Transparent Proxy Pattern)**
+• ProxyAdmin contract (multisig‐controlled) holds upgrade permissions
+• Implementation contracts use UUPS pattern:
+    
+    ```solidity
+    function _authorizeUpgrade(address newImpl) internal override onlyRole(ADMIN_ROLE) {}
+    
+    ```
+    
+
+---
+
+### 9.3 Formal Verification & Audits
+
+1. **Static Analysis**
+    - Tools: Slither, MythX
+    - Key Findings:
+    • No reentrancy on external calls (all state updates before transfers)
+    • Access‐control gaps closed (all sensitive functions guarded)
+    • Integer over/underflow prevented (Solidity ^0.8.x built‐in checks)
+2. **Formal Verification**
+    - Scope: `SmartChequeEscrow` state machine invariants
+    - Tool: Certora Prover
+    - Verified Properties:
+    • Funds never lost: sum of locked + released + refunded = totalAmount
+    • Milestone state transitions linear: `Pending → Completed|Disputed → Released|Refunded`
+3. **Third‐Party Audit Reports**
+    - Firms: ConsenSys Diligence, Trail of Bits
+    - Summary:
+        
+        
+        | Issue Severity | Count | Status |
+        | --- | --- | --- |
+        | Critical | 0 | — |
+        | High | 1 | Fixed in v1.0.1 |
+        | Medium | 2 | Fixed in v1.0.1 |
+        | Low | 5 | Under review |
+    - Mitigations: All high/medium issues patched before mainnet launch; low items on backlog.
+
+---
+
+### 9.4 Gas‐Cost Profiling & Optimizations
+
+- **Profiling**
+    
+    • Hardhat gas reporter used on all main functions:
+    
+    | Function | Gas Usage |
+    | --- | --- |
+    | `createSmartCheque(...)` | ~1 200 000 |
+    | `lockFunds()` | ~80 000 |
+    | `releaseFunds(...)` | ~120 000 |
+    | `openDispute(...)` | ~70 000 |
+    | `resolveDispute(...)` | ~90 000 |
+- **Optimizations**
+    1. **Packed Structs**: Grouped `uint128` + `uint128` for amounts and timestamps
+    2. **Immutable Variables**: Deployed `factory` and `token` addresses marked `immutable` to reduce SLOAD
+    3. **Short‐circuit Checks**: Early `require` to prevent deep logic execution when preconditions fail
+    4. **Unchecked Math**: Used `unchecked {}` blocks where overflow impossible (after Solidity ^0.8 checks)
+- **Future Improvements**
+    
+    • Replace on‐chain string comparisons with `bytes32` enums
+    
+    • Batch releases for multi‐milestone payouts to reduce total transactions
+    
+
+---
+
+## 10. Infrastructure & DevOps for Blockchain Nodes
+
+This section describes the infrastructure‐as‐code, continuous integration / continuous deployment pipelines, and secrets management strategy for the Blockchain Core’s node network and associated services.
+
+### 10.1 Infrastructure as Code (IaC)
+
+All cloud and on-prem resources are provisioned and managed via Terraform. Example module structure:
+
+```
+├─ modules/
+│  ├─ l2-nodes/
+│  │  ├─ main.tf
+│  │  ├─ variables.tf
+│  │  └─ outputs.tf
+│  ├─ sequencer/
+│  │  └─ …
+│  ├─ validators/
+│  │  └─ …
+│  ├─ full-node/
+│  │  └─ …
+│  └─ archive-node/
+│     └─ …
+├─ environments/
+│  ├─ staging/
+│  │  ├─ main.tf
+│  │  └─ terraform.tfvars
+│  └─ production/
+│     ├─ main.tf
+│     └─ terraform.tfvars
+└─ provider.tf
+
+```
+
+### 10.1.1 L2 Node Module
+
+- **Resources**:
+    - `aws_instance` or `google_compute_instance` for sequencer, validator, full-node, archive-node
+    - Auto-scaling group for RPC/WS endpoints
+    - Security groups restricting ports (30303, 8545, 26656)
+- **Configuration**:
+    - User data script installs Docker, pulls node images, mounts data volumes
+    - Tags: `Environment`, `Role`, `Cluster`
+
+### 10.1.2 Sequencer & Validator Modules
+
+- Sequencer: runs rollup batcher, submits transactions to L1
+- Validator: verifies L2 blocks, participates in consensus (if PoS)
+- Include health checks (HTTP probe on `/healthz`), CloudWatch alarms or GCP uptime checks
+
+### 10.1.3 Full & Archive Node Modules
+
+- Full node: default state sync, RPC & WS endpoints
+- Archive node: enables historical queries; larger disk (`gp3`/`pd-ssd`), automatic snapshot backups
+
+---
+
+### 10.2 CI/CD Pipelines
+
+All code (smart contracts, Docker images, indexer, orchestration scripts) is maintained in GitHub Enterprise. Pipelines defined via GitHub Actions:
+
+```yaml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, release/* ]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Dependencies
+        run: yarn install && npm install
+      - name: Run Smart Contract Tests
+        run: yarn test:contracts
+      - name: Static Analysis
+        run: yarn run slither && yarn run mythx
+      - name: Build Docker Images
+        run: docker build -t smartcheque-indexer ./packages/indexer
+
+  deploy:
+    needs: build-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+      - name: Terraform Init & Plan
+        run: |
+          cd infra/environments/production
+          terraform init
+          terraform plan -out plan.tfplan
+      - name: Terraform Apply
+        run: terraform apply -auto-approve plan.tfplan
+      - name: Deploy Contracts
+        run: yarn deploy:contracts --network mainnet
+
+```
+
+### 10.2.1 Stages
+
+1. **Build & Test**
+    - Linting, unit tests (contracts & backend), static security scans
+2. **Artifact Build**
+    - Docker images for indexer, API gateway, oracles
+3. **Deploy Infrastructure**
+    - Terraform plan & apply
+4. **Deploy Application**
+    - Smart-contract migrations (Hardhat), service rolling updates via Kubernetes or ECS
+
+---
+
+### 10.3 Secrets Management
+
+All sensitive secrets—node private keys, validator keys, API credentials—are stored and managed in HashiCorp Vault (or cloud KMS):
+
+- **Vault**
+    - Namespaces per environment (`staging`, `production`)
+    - Access policies scoped to CI/CD pipelines and runtime IAM roles
+    - Dynamic secrets for database credentials and AWS IAM roles (via AWS Vault integration)
+- **Cloud KMS (alternative)**
+    - Envelope encryption: application encrypts data keys, master key stored in KMS
+    - Rotation policy: quarterly key rotation, automatic re-encryption
+
+### 10.3.1 Consumption
+
+- CI/CD: fetch secrets via Vault CLI or GitHub Actions Vault plugin
+- Runtime: node containers retrieve keys at startup via Vault Agent with sidecar pattern
+- Auditing: all secret reads logged in Vault audit backend and CloudTrail
+
+---
+
+# 11. Networking & Security Architecture
+
+Below is the Blockchain Core’s network and security design, aligned with leading security best practices in 2025 (zero-trust, micro-segmentation, continuous compliance).
+
+---
+
+## 11.1 Zero-Trust VPC & Subnet Segmentation
+
+- **Zero-Trust Model**
+    
+    • Implicit “deny all” by default; explicit allow only.
+    
+    • Mutual TLS (mTLS) between all services (API ↔ nodes ↔ indexer).
+    
+- **VPC Structure**
+    - Single environment VPC (`10.0.0.0/16`), subdivided by function and trust level:
+        1. **Ingress Zone** – Public ALB, Bastion, NAT Gateways
+        2. **Application Zone** – API Gateway, Sequencers, Indexers
+        3. **Data Zone** – Full & Archive Nodes, Databases, Vault
+        4. **Management Zone** – CI/CD runners, Monitoring, HSM appliances
+- **Subnet Isolation**
+    
+    
+    | Zone | Subnet Type | CIDR | Egress |
+    | --- | --- | --- | --- |
+    | Ingress | Public | /24 per AZ | ALB → Internet |
+    | Application | Private–App | /24 per AZ | mTLS only to peers |
+    | Data | Private–Data | /26 per AZ | mTLS to App, Vault |
+    | Management | Isolated | /28 per AZ | None; VPN only |
+- **Routing**
+    
+    • No Internet egress from Data & Management zones
+    
+    • Private subnets use dedicated NAT in Ingress zone
+    
+
+---
+
+## 11.2 Micro-Segmentation & Firewall Policies
+
+- **Security Groups (SG)**
+    - Fine-grained rules: one SG per role
+    - Explicit mTLS port allowances (TCP 443 mutual auth)
+- **Network ACLs**
+    - Stateless filtering to block known bad IP ranges (threat intelligence feeds)
+    - Geo-fencing: restrict inbound to approved geographies
+- **Host-Level Protection**
+    - eBPF-based firewalls (Cilium) for process-level controls
+    - Runtime Application Self-Protection (RASP) agents in all containers
+
+---
+
+## 11.3 API Gateway & WAF
+
+- **API Gateway**
+    - AWS ALB or GCP HTTPS LB with mTLS front-to-back
+    - JWT authentication at edge via Lambda@Edge or Cloud Run auth filter
+- **Web Application Firewall**
+    - OWASP CRS v4+, tuned with AI-driven anomaly detection
+    - Custom rules for blockchain RPC patterns (e.g. block header fuzzing)
+    - Bot management: CAPTCHA challenges for unusual traffic
+- **DDoS Mitigation**
+    - Native Shield Advanced / Cloud Armor with real-time traffic anomaly alerts
+    - Elastic load-shedding at edge
+
+---
+
+## 11.4 TLS & Certificate Lifecycle
+
+- **mTLS Everywhere**
+    - All service-to-service communication uses mutual TLS with short-lived certs.
+    - SPIFFE/SPIRE for automated X.509 issuance and rotation.
+- **Certificate Management**
+    - Root & intermediate CAs in HSM (CloudHSM)
+    - CSR automation via ACME-DNS validation
+    - Cert validity: 7 days max; automated rotate & revoke pipelines
+- **Cryptographic Standards**
+    - TLS 1.3 only, ciphers: TLS_AES_256_GCM_SHA384, CHACHA20_POLY1305_SHA256
+    - Enforce forward secrecy, AEAD for all channels
+    - HSTS + Preload, HPKP disabled in favor of mTLS
+
+---
+
+## 11.5 Key Management & HSM Integration
+
+- **Hardware Security Modules**
+    - AWS/GCP CloudHSM clusters in multi-AZ for high availability
+    - Master keys never leave HSM; sign and decrypt operations via API
+- **Secret Zero-Trust Workflow**
+    1. **Bootstrap**: Vault Agent with AppRole pulls short-lived token
+    2. **Fetch**: Request application secrets (node keys, DB creds) dynamically
+    3. **Lease**: Secrets TTL ≤ 1 hour; auto-renew via Vault
+    4. **Revoke**: On pod/container termination, revoke leases immediately
+- **Auditing & Compliance**
+    - All HSM API calls logged to secure SIEM in real-time
+    - Vault audit logging shipped to central observability (Elastic/Datadog)
+
+---
+
+## 11.6 Continuous Security & Compliance
+
+- **Runtime Threat Detection**
+    - eBPF network visibility (Tracee) plus AI-driven anomaly detection
+    - Alerts on unusual RPC patterns, chain reorg spikes
+- **Configuration Compliance**
+    - Continuous scanning (Terraform Sentinel, Open Policy Agent)
+    - Drift detection: auto-remediate non-compliant security groups
+- **Penetration Testing & Red-Teaming**
+    - Quarterly red-team exercises focusing on lateral movement attempts
+    - External pentests against API GW, node endpoints, and mTLS controls
+
+---
+
+# 12. Node Operations & Scaling
+
+This section details the operational framework for blockchain node management, scaling strategies, monitoring, and disaster recovery procedures specifically for the Blockchain Core component.
+
+## 12.1 Node Autoscaling & Sharding
+
+### Architecture
+
+- **Multi-Tier Node Architecture**:
+    - Sequencer Layer: Dedicated auto-scaling group for transaction sequencing
+    - Validator Layer: Fixed-size cluster for consensus (PoS) or fraud proof validation (rollups)
+    - RPC Layer: Horizontally scalable stateless RPC/WS nodes
+    - Archive Layer: Cold storage-optimized nodes with infrequent access
+
+### Scaling Implementation
+
+```hcl
+# Terraform Example: RPC Node Autoscaling
+resource "aws_autoscaling_group" "rpc_nodes" {
+  min_size         = 3
+  max_size         = 50
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value = 60.0
+  }
+  metric_aggregation_type = "Average"
+
+  # Blockchain-specific scaling
+  scaling_adjustment = {
+    rpc_requests = {
+      metric_name        = "RPCRequestsPerMinute"
+      threshold_per_node = 1000
+      scale_out_step     = 2
+    }
+    pending_txs = {
+      metric_name    = "PendingTransactions"
+      threshold      = 5000
+      scale_out_step = 3
+    }
+  }
+}
+```
+
+### Sharding Strategy
+
+- **L2-Specific Partitioning**:
+    - Transaction sharding by `fromAddress` prefix (first 4 hex chars)
+    - Zone-aware placement (nodes in same AZ as primary users)
+    - Dynamic shard rebalancing during low-traffic periods
+
+## 12.2 Monitoring & Alerting Framework
+
+### Monitoring Stack
+
+```
+Prometheus → Alertmanager ↗ PagerDuty
+           ↘ Grafana → Dashboards
+           ↘ Loki → Log Aggregation
+```
+
+### Critical Alerts
+
+| Metric | Threshold | Severity | Response Protocol |
+| --- | --- | --- | --- |
+| Block Production Lag | > 12 blocks | Critical | Failover sequencer |
+| RPC Error Rate | > 5% last 5m | High | Rotate unhealthy nodes |
+| Pending TX Queue | > 10,000 | High | Scale out RPC nodes |
+| Peer Count | < 10 | Medium | Check network config |
+| Sync Status | Not in sync | Critical | Restart with snapshot |
+
+### Blockchain-Specific Dashboards
+
+1. **Node Health Dashboard**: Block height, peer connections, sync status
+2. **Performance Dashboard**: TPS, gas usage, tx inclusion latency
+3. **Resource Dashboard**: CPU/Memory/Network by node type
+4. **RPC Analytics**: Method call frequency, error rates, latency percentiles
+
+## 12.3 Backup & Restore Procedures
+
+### Backup Strategy
+
+```mermaid
+graph LR
+  A[Full Node] -- Hourly Snapshots --> B[S3 Standard]
+  C[Archive Node] -- Continuous Stream --> D[S3 Glacier Instant]
+  E[Validator Keys] -- Real-time --> F[HSM-backed Vault]
+
+```
+
+### Restoration Runbook
+
+1. **Full Node Recovery**:
+    
+    ```bash
+    # Restore from latest snapshot
+    aws s3 cp s3://node-backups/env/prod/fullnode/latest.tar.gz - | tar xz
+    geth --datadir ./restored init genesis.json
+    geth --datadir ./restored --syncmode snap
+    
+    ```
+    
+2. **Archive Node Recovery**:
+    
+    ```bash
+    # Parallel restore from Glacier
+    parallel -j 32 aws s3 cp {} ./data/ ::: \\
+    $(aws s3 ls s3://archive-backups/blockdata/ | awk '{print $4}')
+    
+    # Rebuild index
+    erigon --datadir ./data --experimental.sync
+    
+    ```
+    
+3. *Validator Key Restoration:
+    
+    ```python
+    # HSM key recovery script
+    from cloudhsm import KeyManager
+    km = KeyManager(cluster_id="hsm-cluster-01")
+    restored_key = km.restore_key(
+      key_alias="validator-005",
+      recovery_point="20250801T120000Z"
+    )
+    
+    ```
+    
+
+## 12.4 Chaos Engineering & Resilience Testing
+
+### Failure Simulations
+
+```yaml
+# Chaos Mesh Experiment
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: blockhain-network-partition
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: ["blockchain-nodes"]
+  direction: both
+  duration: 5m
+  externalTargets: ["8.8.8.8"] # Internet loss simulation
+
+```
+
+### Resilience Metrics
+
+- **RTO (Recovery Time Objective)**:
+    - RPC Nodes: < 3 minutes
+    - Sequencers: < 5 minutes
+- **RPO (Recovery Point Objective)**:
+    - Full Nodes: < 1 block
+    - Archive Nodes: 0 data loss
+
+## 12.5 Node Upgrade Procedures
+
+### Zero-Downtime Upgrade Process
+
+1. **Canary Deployment**:
+    - 5% nodes on new version
+    - Monitor block propagation latency
+2. **Rolling Update**:
+    - 25% nodes/hour during off-peak
+    - Auto-rollback if sync divergence > 2 blocks
+3. **Consensus Critical Upgrades**:
+    - Coordinated via on-chain governance proposal
+    - Activation at specific block height
+
+---
+
+# 13. L2 Sequencer & Fraud-Proof Orchestration
+
+## 13.1 Sequencer High-Availability Architecture
+
+### Fault-Tolerant Sequencer Cluster
+
+```mermaid
+graph LR
+  Client --> LB[Load Balancer]
+  LB --> S1[Sequencer 1]
+  LB --> S2[Sequencer 2]
+  LB --> S3[Sequencer 3]
+  S1 -->|Leader| RAFT[RAFT Consensus]
+  S2 --> RAFT
+  S3 --> RAFT
+  RAFT --> L1[Ethereum Mainnet]
+  RAFT --> DB[State DB]
+
+```
+
+**Implementation Details:**
+
+- **Active-Passive Setup**: 3-node cluster with leader election
+- **Consensus Protocol**: Raft consensus for leader election (2s heartbeat interval)
+- **Failover Process**:
+    1. Leader failure detected after 3 missed heartbeats
+    2. Remaining nodes initiate new election
+    3. New leader resumes batch processing within 5s
+- **State Synchronization**:
+Hot standby nodes maintain real-time state via:
+    
+    ```go
+    func syncState(leaderState State) {
+      currentState := loadCheckpoint()
+      if currentState.Height < leaderState.Height {
+        fetchDiff(leaderState.Height - currentState.Height)
+      }
+    }
+    
+    ```
+    
+
+## 13.2 Fraud-Proof Submission Workflow
+
+### Optimistic Rollup Timeline
+
+```mermaid
+timeline
+  title Fraud Proof Challenge Window
+  section Batch Submission
+    Sequencer submits batch : 0
+    State commitment posted : 0
+  section Challenge Period
+    Fraud proof submission window : 7 days
+    Validator monitoring : Active
+  section Finalization
+    State finalized : After 7 days
+
+```
+
+**Fraud Proof Process:**
+
+1. **Batch Submission**:
+    - Sequencer posts transaction batch + state root to L1
+    - Emits `StateCommitment` event with batch details
+2. **Dispute Initiation**:
+    - Validators monitor state transitions
+    - Suspect fraud? Submit challenge:
+        
+        ```solidity
+        function challengeState(
+          uint256 batchId,
+          bytes calldata preState,
+          bytes calldata postState,
+          bytes calldata proof
+        ) external payable {
+          require(isValidChallenge(batchId), "Invalid batch");
+          challenges[batchId] = Challenge(msg.sender, block.timestamp);
+        }
+        ```
+        
+3. **Proof Verification**:
+    - Verifier contract executes disputed transactions
+    - Compares result with sequencer's state root
+    - Resolves within 30 minutes of challenge
+4. **Resolution**:
+    - Valid fraud: Slash sequencer bond, revert batch
+    - Invalid challenge: Slash challenger bond
+
+## 13.3 Slashing Conditions & Monitoring
+
+### Automated Slashing Conditions
+
+| Condition | Detection Method | Penalty | Recovery |
+| --- | --- | --- | --- |
+| **Double Signing** | Conflicting state roots for same batch | 100% bond slash + ejection | New sequencer election |
+| **Liveness Failure** | >3 missed batches in 24h | 20% bond slash | Manual intervention |
+| **Invalid State Transition** | Successful fraud proof | 100% bond slash | Batch reversion |
+| **Censorship** | >5% tx delayed >10 blocks | 15% bond slash | Priority lane bypass |
+
+### Monitoring & Alerting System
+
+```python
+def monitor_sequencer():
+    while True:
+        batch_interval = time_since_last_batch()
+        if batch_interval > EXPECTED_BATCH_TIME * 1.5:
+            alert("LivenessFailure", severity="CRITICAL")
+
+        state_roots = get_recent_state_roots()
+        if has_duplicate_heights(state_roots):
+            alert("DoubleSigningAttempt", severity="EMERGENCY")
+
+        pending_txs = get_pending_tx_count()
+        if pending_txs > 1000 and last_batch_size < 50:
+            alert("PossibleCensorship", severity="HIGH")
+
+        time.sleep(30)
+
+```
+
+**Automated Response Workflow:**
+
+1. Alerts trigger PagerDuty/Slack notifications
+2. Critical issues auto-initiate failover:
+    
+    ```bash
+    # Automated sequencer failover script
+    if [[ $ALERT_TYPE == "LivenessFailure" ]]; then
+      raft-cli demote-leader --node $FAILED_NODE
+      raft-cli elect-leader --node $BACKUP_NODE
+    fi
+    
+    ```
+    
+3. Slashing executed via L1 smart contract:
+    
+    ```solidity
+    function slashSequencer(address sequencer, SlashReason reason) internal {
+      uint256 bond = bonds[sequencer];
+      bonds[sequencer] = 0;
+      emit SequencerSlashed(sequencer, reason, bond);
+    }
+    
+    ```
+    
+
+## 13.4 State Commit Cadence & Optimization
+
+**Performance Parameters:**
+
+| Parameter | Value | Tuning Mechanism |
+| --- | --- | --- |
+| Batch Interval | 2 minutes | Dynamic adjustment based on L1 gas prices |
+| Max Batch Size | 1,000 tx | Configurable via governance vote |
+| State Commit Cost | 0.01 ETH | Optimized with zk-SNARK compression |
+| Challenge Window | 7 days | Fixed (security vs capital efficiency tradeoff) |
+
+**Batch Compression:**
+
+```rust
+fn compress_batch(txs: Vec<Transaction>) -> CompressedBatch {
+    let mut compressor = ZkSnarkCompressor::new();
+    for tx in txs {
+        compressor.add_transaction(tx);
+    }
+    let proof = compressor.generate_proof();
+    CompressedBatch {
+        input_hash: compressor.input_hash(),
+        proof,
+        output_root: compressor.output_root()
+    }
+}
+```
+
+---
+
+This architecture ensures:
+
+- **High Availability**: <30s failover during sequencer outages
+- **Security**: Economic guarantees via crypto-economic slashing
+- **Efficiency**: 2-minute batch commits with 7-day challenge windows
+- **Censorship Resistance**: Automated detection of transaction exclusion
+- **Integrity**: Cryptographic proof of valid state transitions
+
+# 14. Oracle & Cross-Chain Bridge Integration
+
+## 14.1 Oracle Adapter Architecture
+
+### Overview
+
+Oracle adapters provide a standardized interface for connecting smart contracts to external data sources. They enable the Smart Cheque platform to verify real-world events (e.g., delivery confirmations, project milestones) by fetching and validating data from trusted external systems.
+
+### Unified Oracle Interface
+
+```solidity
+interface IOracleAdapter {
+    // Request data from external source
+    function requestData(
+        string memory dataSource,  // Source identifier (e.g., "DHL", "FedEx")
+        bytes memory query,        // Query parameters (e.g., tracking number)
+        uint256 callbackGasLimit   // Gas limit for callback execution
+    ) external returns (bytes32 requestId);
+
+    // Handle oracle response
+    function fulfillRequest(
+        bytes32 requestId,         // Unique request identifier
+        bytes memory data           // Response data from oracle
+    ) external;
+
+    // Retrieve quorum-validated result
+    function getQuorumResult(bytes32 requestId) external view returns (bytes memory);
+}
+
+```
+
+### Adapter Patterns
+
+1. **Chainlink Integration**
+    
+    Connects to Chainlink's decentralized oracle network to fetch verified external data. Uses Chainlink's job-based model where specific jobs are defined for different data types.
+    
+2. **Band Protocol Integration**
+    
+    Leverages Band's cross-chain data oracle platform, suitable for price feeds and other frequently updated data with high reliability requirements.
+    
+3. **Custom P2P Oracle**
+    
+    A fallback network of permissioned nodes that provide data verification using Byzantine Fault Tolerant consensus. Ensures data integrity even if some nodes are compromised.
+    
+
+### Quorum Logic
+
+Ensures data validity by requiring multiple independent oracles to agree on results before accepting them as truth. This prevents single points of failure and manipulation.
+
+```solidity
+function verifyQuorum(bytes32 requestId) internal view returns (bool) {
+    uint256 confirmations;
+    bytes memory consensusValue;
+
+    for (uint i=0; i < oracles.length; i++) {
+        (bool success, bytes memory data) = oracles[i].staticcall(
+            abi.encodeWithSignature("getResult(bytes32)", requestId)
+        );
+        if (success) {
+            if (consensusValue.length == 0) consensusValue = data;
+            if (keccak256(data) == keccak256(consensusValue)) confirmations++;
+        }
+    }
+    return confirmations >= requiredQuorum; // e.g., 3/5 agreement
+}
+
+```
+
+## 14.2 Cross-Chain Bridge Architecture
+
+### Overview
+
+The bridge enables secure transfer of assets between Ethereum (L1) and our Layer 2 rollup chain. It uses a lock-mint/burn-unlock model to maintain asset parity across chains while ensuring security through cryptographic proofs.
+
+### Bridge Topology
+
+```mermaid
+graph LR
+  L1[Ethereum Mainnet] -->|Lock Tokens| BridgeContract
+  BridgeContract -->|Emit Event| Relayers
+  Relayers -->|Submit Proof| L2[L2 Rollup]
+  L2 -->|Mint Wrapped Token| User
+
+```
+
+### Relayer Network
+
+Relayers are incentivized nodes that:
+
+1. Monitor events on Ethereum
+2. Generate cryptographic proofs of transactions
+3. Submit proofs to L2 for verification
+4. Trigger token minting on L2
+
+```go
+type RelayerNode struct {
+  L1Client   *ethclient.Client
+  L2Client   *ethclient.Client
+  PrivateKey *ecdsa.PrivateKey
+}
+
+func (r *RelayerNode) generateProof(event *BridgeEvent) *Proof {
+  receipt, _ := r.L1Client.TransactionReceipt(context.Background(), event.TxHash)
+  return merkle.BuildProof(receipt.Logs, event.LogIndex)
+}
+```
+
+### Proof Relay Logic
+
+Uses Merkle proofs to verify event inclusion in Ethereum blocks:
+
+```solidity
+function submitProof(
+  address l1Token,
+  uint256 amount,
+  address recipient,
+  bytes32[] memory merkleProof
+) external {
+  bytes32 leaf = keccak256(abi.encode(l1Token, amount, recipient));
+  require(verifyInclusion(merkleProof, root, leaf), "Invalid proof");
+  L2Token(l1Token).mint(recipient, amount);
+}
+```
+
+## 14.3 Reorg Handling & Finality
+
+### Challenge
+
+Blockchain reorganizations (reorgs) can invalidate previously accepted transactions when a different chain becomes canonical. This poses risks for cross-chain operations that assume transaction finality.
+
+### Solution
+
+1. **Finality Monitoring**
+    
+    Tracks block confirmations and only considers transactions final after sufficient depth (e.g., 15 blocks for Ethereum PoS)
+    
+2. **Reorg Detection**
+    
+    Compares block hashes at specific heights to identify chain reorganizations
+    
+3. **State Recovery**
+    
+    Automatically reverts affected transactions and reprocesses them on the new canonical chain
+    
+
+```python
+class FinalityMonitor:
+    def handle_reorg(self, new_chain):
+        for height, block in self.confirmed_blocks.items():
+            if new_chain[height] != block.hash:
+                self.revert_affected_bridges(height)
+
+```
+
+## 14.4 Settlement Finality Monitoring
+
+### Importance
+
+Ensures assets are only released on L2 after the corresponding L1 transactions are irreversibly finalized, preventing double-spending and other fraud.
+
+### Implementation
+
+```solidity
+contract FinalityOracle {
+    function requireFinal(uint256 blockNumber) public view {
+        require(finalityStatus[blockNumber].isFinal, "Block not finalized");
+        require(block.timestamp <= status.timestamp + 1 hours, "Status expired");
+    }
+}
+
+// Usage in bridge
+function completeWithdrawal(uint256 blockNumber) external {
+    finalityOracle.requireFinal(blockNumber);
+    // Process withdrawal
+}
+
+```
+
+## 14.5 Fallback Mechanisms
+
+### Multi-Source Validation
+
+Uses multiple independent oracles to verify critical data, requiring consensus before acceptance:
+
+```solidity
+function validateWithMultipleSources(
+    bytes32 queryHash,
+    uint256 minConfirmations
+) internal view returns (bool) {
+    uint256 validCount;
+    for (uint i=0; i < oracles.length; i++) {
+        if (oracles[i].hasConfirmed(queryHash)) {
+            validCount++;
+            if (validCount >= minConfirmations) return true;
+        }
+    }
+    return false;
+}
+
+```
+
+### Emergency Circuit Breaker
+
+Allows pausing system operations during critical events or detected vulnerabilities:
+
+```solidity
+contract CircuitBreaker {
+    bool public systemPaused;
+
+    function pauseSystem() external onlyGuardian {
+        systemPaused = true;
+    }
+
+    modifier whenNotPaused() {
+        require(!systemPaused, "System paused");
+        _;
+    }
+}
+
+```
+
+## 14.6 Security Considerations
+
+1. **Oracle Manipulation Protection**
+    - Quorum requirements prevent single malicious oracle from compromising system
+    - Oracle reputation tracking and slashing for faulty reports
+2. **Bridge Security**
+    - Time-locked upgrades for critical bridge components
+    - Multi-sig control for privileged operations
+    - Continuous monitoring for unusual withdrawal patterns
+3. **Reorg Resilience**
+    - State recovery procedures tested through regular chaos engineering
+    - Economic disincentives for chain reorganizations through slashing
+4. **Finality Assurance**
+    - Multiple finality oracle providers
+    - Fallback to longer confirmation periods during network instability
+
+This comprehensive integration framework ensures reliable oracle data feeds and secure cross-chain operations, forming a critical foundation for the Smart Cheque platform's ability to interact with external systems and transfer value between chains.
+
+---
+
+## 15. Sections Left for Later
+
+1. Testing & QA Strategy
+    - Local/forked-chain testing (Hardhat/Ganache) for contract logic and upgrade flows
+    - End-to-end scenarios: API → sequencer → block production → indexer → client event
+    - Chaos testing scripts for node crashes, network partitions, invalid proofs
+2. Disaster Recovery & Business Continuity
+    - RTO/RPO targets per node type, cross-region replication of node databases and state snapshots
+    - Regular failover drills and recovery runbooks for sequencer and validator downtime
+3. Observability & Distributed Tracing
+    - Correlate API calls, indexer events, and on-chain txs via OpenTelemetry trace IDs
+    - SLO/SLI definitions for block time, tx inclusion latency, API error rate
+    - Service-map diagrams showing interactions between API gateway, sequencer, indexer, and nodes
+4. On-Chain Governance & Upgrade Process
+    - Smart-contract governance workflows: proposal → voting → timelock → upgrade execution
+    - Multisig or DAO-based key-holders, upgrade-approval off-chain process documentation
