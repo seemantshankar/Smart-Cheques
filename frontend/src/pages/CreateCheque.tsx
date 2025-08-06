@@ -106,7 +106,7 @@ const CreateCheque = () => {
       );
 
       const receipt = await tx.wait();
-      const event = receipt.events?.find((e: any) => e.event === 'ChequeCreated');
+      const event = receipt.events?.find((e: ethers.Event) => e.event === 'ChequeCreated');
       const chequeId = event?.args?.chequeId;
 
       // Save additional data to backend
@@ -132,11 +132,11 @@ const CreateCheque = () => {
       });
 
       navigate(`/cheques/${chequeId}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error creating cheque:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to create Smart Cheque',
+        description: error instanceof Error ? error.message : 'Failed to create Smart Cheque',
         status: 'error',
         duration: 5000,
         isClosable: true,

@@ -83,7 +83,7 @@ const ChequeDetails = () => {
     }
   };
 
-  const handleCompleteMilestone = async () => {
+  const handleCompleteMilestone = async (): Promise<void> => {
     if (!cheque || selectedMilestone === null || !provider || !account) return;
 
     try {
@@ -112,11 +112,12 @@ const ChequeDetails = () => {
 
       onClose();
       fetchChequeDetails();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to complete milestone';
       console.error('Error completing milestone:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to complete milestone',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
@@ -163,7 +164,7 @@ const ChequeDetails = () => {
     );
   }
 
-  const completedMilestones = cheque.milestones.filter(m => m.isCompleted).length;
+  const completedMilestones = cheque.milestones.filter((m: Milestone) => m.isCompleted).length;
   const progress = (completedMilestones / cheque.milestones.length) * 100;
 
   return (
@@ -215,7 +216,7 @@ const ChequeDetails = () => {
         <Box>
           <Heading size="md" mb={4}>Milestones</Heading>
           <VStack spacing={4} align="stretch">
-            {cheque.milestones.map((milestone, index) => (
+            {cheque.milestones.map((milestone: Milestone, index: number) => (
               <Box
                 key={index}
                 p={4}
@@ -274,7 +275,7 @@ const ChequeDetails = () => {
               <Text>Please provide proof of completion for this milestone:</Text>
               <Textarea
                 value={proof}
-                onChange={(e) => setProof(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setProof(e.target.value)}
                 placeholder="Describe how you completed this milestone..."
               />
             </VStack>

@@ -15,7 +15,7 @@ import {
   ModalBody,
   ModalFooter,
   useDisclosure,
-  Textarea,
+
   FormControl,
   FormLabel,
   Select,
@@ -74,7 +74,7 @@ const DisputeManager = () => {
             setDisputes([]);
             return;
           }
-        } catch (_) {
+        } catch {
           // ignore JSON parse error and treat as real error below
         }
         throw new Error(`Failed to load disputes (${response.status})`);
@@ -145,15 +145,15 @@ const DisputeManager = () => {
 
       onClose();
       fetchDisputes();
-    } catch (error: any) {
-      console.error('Error resolving dispute:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to resolve dispute',
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+    } catch (error: unknown) {
+        console.error('Error resolving dispute:', error);
+        toast({
+          title: 'Error',
+          description: error instanceof Error ? error.message : 'Failed to resolve dispute',
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
     } finally {
       setResolving(false);
     }
@@ -197,8 +197,8 @@ const DisputeManager = () => {
       <VStack spacing={8}>
         <Skeleton height="40px" width="200px" />
         <SimpleGrid columns={{ base: 1, md: 2 }} spacing={6} width="100%">
-          {Array(4).fill(0).map((_, i) => (
-            <Skeleton key={i} height="200px" />
+          {Array(4).fill(0).map((_item, _i) => (
+            <Skeleton key={_i} height="200px" />
           ))}
         </SimpleGrid>
       </VStack>

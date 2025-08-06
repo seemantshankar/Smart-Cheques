@@ -1,7 +1,20 @@
 import React, { useState, useEffect } from 'react';
 
 // Type assertion helper for ethereum
-const getEthereum = () => (window as any).ethereum;
+const getEthereum = () => window.ethereum;
+
+// Define proper TypeScript interfaces for Ethereum provider
+interface EthereumProvider {
+  request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
+  on: (event: string, callback: (...args: unknown[]) => void) => void;
+  removeAllListeners: (event: string) => void;
+}
+
+interface _EthereumError {
+  code: number;
+  message: string;
+}
+
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -13,7 +26,7 @@ import {
   useColorModeValue,
   useDisclosure
 } from '@chakra-ui/react';
-import { useWeb3React } from '@web3-react/core';
+
 import { metaMask, metaMaskHooks } from '../connectors';
 
 const Navbar = () => {
@@ -21,12 +34,12 @@ const Navbar = () => {
   const chainId = useChainId();
   const accounts = useAccounts();
   const account = accounts?.[0];
-  const isActivating = useIsActivating();
+  const _isActivating = useIsActivating();
   const active = useIsActive();
   const provider = useProvider();
   // Note: error property removed in Web3React v8
-  const library = provider;
-  const { isOpen, onOpen, onClose } = useDisclosure();
+  const _library = provider;
+  const { isOpen: _isOpen, onOpen: _onOpen, onClose: _onClose } = useDisclosure();
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(true);
 
   useEffect(() => {
@@ -40,13 +53,13 @@ const Navbar = () => {
     
     // Clean up any old event listeners
     return () => {
-      const ethereum = getEthereum();
+      const ethereum = getEthereum() as EthereumProvider;
       if (ethereum && ethereum.removeAllListeners) {
         try {
           ethereum.removeAllListeners('disconnect');
           ethereum.removeAllListeners('chainChanged');
           ethereum.removeAllListeners('accountsChanged');
-        } catch (e) {
+        } catch {
           // Ignore cleanup errors
         }
       }
@@ -76,7 +89,7 @@ const Navbar = () => {
 };
 
 async function ensureChain(params: {
-  ethereum: any;
+  ethereum: EthereumProvider;
   chainIdHex: "0x7a69" | "0x539";
   chainName?: string;
   rpcUrl?: string;
@@ -99,8 +112,8 @@ async function ensureChain(params: {
       method: "wallet_switchEthereumChain",
       params: [{ chainId: chainIdHex }],
     });
-  } catch (err: any) {
-    if (err?.code === 4902) {
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'code' in err && (err as {code: number}).code === 4902) {
       await ethereum.request({
         method: "wallet_addEthereumChain",
         params: [
@@ -161,8 +174,11 @@ const connectWallet = async () => {
     const chainIdHex = await detectLocalChainIdHex();
     
     const ethereum = getEthereum();
+    if (!ethereum) {
+      throw new Error('Ethereum provider not found');
+    }
      await ensureChain({
-       ethereum,
+       ethereum: ethereum as EthereumProvider,
        chainIdHex,
        rpcUrl: import.meta.env.VITE_RPC_URL,
      });
@@ -171,20 +187,23 @@ const connectWallet = async () => {
        console.log('Wallet connection activated');
        
        // Set up EIP-1193 compliant event listeners
-       if (ethereum && ethereum.on) {
-        ethereum.on('disconnect', () => {
+       const ethProvider = ethereum as EthereumProvider;
+       if (ethProvider && ethProvider.on) {
+        ethProvider.on('disconnect', () => {
           console.log('MetaMask disconnected');
           if (metaMask.deactivate) {
             metaMask.deactivate();
           }
         });
         
-        ethereum.on('chainChanged', (chainId: string) => {
+        ethProvider.on('chainChanged', (...args: unknown[]) => {
+          const chainId = args[0] as string;
           console.log('Chain changed:', chainId);
           window.location.reload();
         });
         
-        ethereum.on('accountsChanged', (accounts: string[]) => {
+        ethProvider.on('accountsChanged', (...args: unknown[]) => {
+          const accounts = args[0] as string[];
           console.log('Accounts changed:', accounts);
           if (accounts.length === 0) {
             if (metaMask.deactivate) {
@@ -195,14 +214,14 @@ const connectWallet = async () => {
           }
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error connecting wallet:', error);
       
       // Handle chain not added error
-      if (error.code === 4902) {
+      if (error && typeof error === 'object' && 'code' in error && (error as {code: number}).code === 4902) {
         try {
           const expectedChainId = Number(import.meta.env.VITE_CHAIN_ID || '1337');
-          await getEthereum()?.request({
+          await (getEthereum() as EthereumProvider)?.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: `0x${expectedChainId.toString(16)}`,
@@ -217,11 +236,11 @@ const connectWallet = async () => {
             }]
           });
           await metaMask.activate();
-        } catch (addError: any) {
-          alert(`Failed to add network and connect wallet: ${addError?.message || 'Unknown error'}`);
+        } catch (addError: unknown) {
+          alert(`Failed to add network and connect wallet: ${addError instanceof Error ? addError.message : 'Unknown error'}`);
         }
       } else {
-        alert(`Failed to connect wallet: ${(error as any)?.message || 'Unknown error'}`);
+        alert(`Failed to connect wallet: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
   };

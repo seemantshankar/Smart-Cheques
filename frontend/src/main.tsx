@@ -5,7 +5,6 @@ import App from './App'
 import { Buffer } from "buffer";
 
 if (!window.Buffer) {
-  // @ts-ignore
   window.Buffer = Buffer;
 }
 
