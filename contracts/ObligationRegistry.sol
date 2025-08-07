@@ -164,6 +164,16 @@ contract ObligationRegistry is
     }
 
     /**
+     * @dev Alias for backend compatibility
+     */
+    function updateReliabilityScore(
+        address oracle,
+        uint8 newScore
+    ) external onlyRole(ADMIN_ROLE) {
+        updateOracleScore(oracle, newScore);
+    }
+
+    /**
      * @dev Updates the minimum required oracle score
      * @param newMinimumScore New minimum score (0-100)
      */
@@ -172,6 +182,20 @@ contract ObligationRegistry is
     ) external onlyRole(ADMIN_ROLE) {
         require(newMinimumScore <= 100, "Score must be between 0 and 100");
         minimumOracleScore = newMinimumScore;
+    }
+
+    /**
+     * @dev View helper to get oracle score
+     */
+    function getOracleScore(address oracle) external view returns (uint8) {
+        return oracleScores[oracle];
+    }
+
+    /**
+     * @dev View helper to get minimum score requirement
+     */
+    function getMinimumOracleScore() external view returns (uint8) {
+        return minimumOracleScore;
     }
 
     /**

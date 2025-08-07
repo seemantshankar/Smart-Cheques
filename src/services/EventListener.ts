@@ -37,8 +37,8 @@ export class EventListener {
       {
         address: process.env.OBLIGATION_REGISTRY_ADDRESS!,
         abi: [
-          'event ObligationRegistered(bytes32 indexed hash, address indexed oracle)',
-          'event ObligationVerified(bytes32 indexed hash, bool verified)'
+          'event ObligationRegistered(bytes32 indexed obligationId, bytes32 hash, address indexed oracleAddress)',
+          'event ObligationVerified(bytes32 indexed obligationId, bool success, uint256 timestamp)'
         ],
         fromBlock: parseInt(process.env.START_BLOCK || '0'),
         events: ['ObligationRegistered', 'ObligationVerified']
@@ -185,20 +185,18 @@ export class EventListener {
   }
 
   private async handleObligationRegistered(event: ethers.Event) {
-    const [hash, oracle] = event.args!;
-    
+    const [obligationId, _hash, oracleAddress] = event.args!;
     await db.createOracleData({
-      obligation_hash: hash,
-      oracle_address: oracle,
+      obligation_hash: obligationId,
+      oracle_address: oracleAddress,
       data_hash: ethers.constants.HashZero,
       reliability_score: 0
     });
   }
 
   private async handleObligationVerified(event: ethers.Event) {
-    const [hash, verified] = event.args!;
-    // Update obligation verification status
-    // Implementation depends on database schema and requirements
+    const [_obligationId, _success] = event.args!;
+    // Optionally persist verification outcome; current schema stores oracle_data only
   }
 
   async stop() {

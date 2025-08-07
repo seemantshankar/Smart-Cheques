@@ -138,6 +138,22 @@ export class DB {
     return result.rows[0] || null;
   }
 
+  async getChequeByChainAndChequeId(chainId: number, chequeId: string): Promise<Cheque | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM cheques WHERE chain_id = $1 AND cheque_id = $2',
+      [chainId, chequeId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async getChequeByContractAddress(contractAddress: string): Promise<Cheque | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM cheques WHERE contract_address = $1 LIMIT 1',
+      [contractAddress]
+    );
+    return result.rows[0] || null;
+  }
+
   async getChequesByAddress(address: string): Promise<Cheque[]> {
     const result = await this.pool.query(
       'SELECT * FROM cheques WHERE buyer_address = $1 OR seller_address = $1 ORDER BY created_at DESC',
@@ -170,6 +186,14 @@ export class DB {
       [chequeId]
     );
     return result.rows;
+  }
+
+  async getMilestoneByChequeAndIndex(chequeId: string, milestoneIndex: number): Promise<Milestone | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM milestones WHERE cheque_id = $1 AND milestone_index = $2',
+      [chequeId, milestoneIndex]
+    );
+    return result.rows[0] || null;
   }
 
   async updateMilestoneCompletion(id: string, proof: string): Promise<Milestone> {
@@ -214,7 +238,12 @@ export class DB {
 
   async getDisputesByAddress(address: string): Promise<Dispute[]> {
     const result = await this.pool.query(
-      `SELECT d.* FROM disputes d
+      `SELECT 
+          d.*, 
+          c.contract_address AS cheque_contract_address,
+          c.buyer_address,
+          c.seller_address
+       FROM disputes d
        JOIN cheques c ON d.cheque_id = c.id
        WHERE c.buyer_address = $1 OR c.seller_address = $1
        ORDER BY d.created_at DESC`,
@@ -263,6 +292,13 @@ export class DB {
     const result = await this.pool.query(
       'SELECT * FROM oracle_data WHERE obligation_hash = $1 ORDER BY reliability_score DESC',
       [obligationHash]
+    );
+    return result.rows;
+  }
+
+  async getDistinctObligations(): Promise<{ obligation_hash: string }[]> {
+    const result = await this.pool.query(
+      'SELECT DISTINCT obligation_hash FROM oracle_data'
     );
     return result.rows;
   }

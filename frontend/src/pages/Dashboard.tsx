@@ -43,7 +43,7 @@ const Dashboard = () => {
       if (!account || !provider) return;
 
       try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/cheques?address=${account}`);
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/cheques?address=${account}`);
         const data = await response.json();
 
         if (data.success) {

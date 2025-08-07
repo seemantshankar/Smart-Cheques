@@ -21,8 +21,8 @@ export class OracleService {
     this.obligationRegistry = new ethers.Contract(
       process.env.OBLIGATION_REGISTRY_ADDRESS!,
       [
-        'function verifyObligation(bytes32 hash, bytes calldata data, uint8 v, bytes32 r, bytes32 s)',
-        'function updateReliabilityScore(address oracle, uint256 score)'
+        'function verifyObligation(bytes32 obligationId) returns (bool)',
+        'function updateOracleScore(address oracle, uint8 newScore)'
       ],
       this.wallet
     );
@@ -42,26 +42,26 @@ export class OracleService {
     ]);
   }
 
-  async verifyObligation(obligationHash: string): Promise<boolean> {
+  async verifyObligation(obligationId: string): Promise<boolean> {
     try {
       // Get oracle data from database
-      const oracleDataList = await db.getOracleDataByHash(obligationHash);
+      const oracleDataList = await db.getOracleDataByHash(obligationId);
       
       if (oracleDataList.length === 0) {
-        console.error(`No oracle data found for obligation ${obligationHash}`);
+        console.error(`No oracle data found for obligation ${obligationId}`);
         return false;
       }
 
       // Aggregate responses from multiple oracles
       const responses = await Promise.all(
-        oracleDataList.map(data => this.queryOracle(data.oracle_address, obligationHash))
+        oracleDataList.map(data => this.queryOracle(data.oracle_address, obligationId))
       );
 
       // Filter out failed responses
       const validResponses = responses.filter(r => r !== null);
       
       if (validResponses.length === 0) {
-        console.error(`No valid oracle responses for obligation ${obligationHash}`);
+        console.error(`No valid oracle responses for obligation ${obligationId}`);
         return false;
       }
 
@@ -82,9 +82,16 @@ export class OracleService {
       // Update oracle reliability scores based on consensus
       await this.updateReliabilityScores(oracleDataList, validResponses, isVerified);
 
+      // Optionally trigger on-chain verification
+      try {
+        await this.obligationRegistry.verifyObligation(obligationId);
+      } catch (e) {
+        // ignore failures to avoid blocking
+      }
+
       return isVerified;
     } catch (error) {
-      console.error(`Error verifying obligation ${obligationHash}:`, error);
+      console.error(`Error verifying obligation ${obligationId}:`, error);
       return false;
     }
   }
@@ -113,15 +120,15 @@ export class OracleService {
     }
   }
 
-  private async queryBandProtocol(obligationHash: string, config: OracleConfig): Promise<boolean> {
-    const response = await axios.get(`${config.endpoint}/verify/${obligationHash}`, {
+  private async queryBandProtocol(obligationId: string, config: OracleConfig): Promise<boolean> {
+    const response = await axios.get(`${config.endpoint}/verify/${obligationId}`, {
       headers: config.apiKey ? { 'X-API-Key': config.apiKey } : undefined
     });
 
     return response.data.verified;
   }
 
-  private async queryChainlink(obligationHash: string, config: OracleConfig): Promise<boolean> {
+  private async queryChainlink(obligationId: string, config: OracleConfig): Promise<boolean> {
     // Initialize Chainlink contract
     const chainlinkOracle = new ethers.Contract(
       config.endpoint,
@@ -129,7 +136,7 @@ export class OracleService {
       this.provider
     );
 
-    return await chainlinkOracle.verify(obligationHash);
+    return await chainlinkOracle.verify(obligationId);
   }
 
   private getOracleType(oracleAddress: string): string {
@@ -176,7 +183,7 @@ export class OracleService {
 
     // Update scores in smart contract
     for (const update of scoreUpdates) {
-      await this.obligationRegistry.updateReliabilityScore(
+      await this.obligationRegistry.updateOracleScore(
         update.address,
         update.score
       );

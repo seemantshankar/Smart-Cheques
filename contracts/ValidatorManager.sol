@@ -107,10 +107,13 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     event DelegationRemoved(address indexed delegator, address indexed validator, uint256 amount);
     event BlockProduced(address indexed validator, uint256 blockNumber, uint256 reward);
     
+    address public treasuryAddress;
+
     constructor(address _governanceToken) {
         governanceToken = GovernanceToken(_governanceToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(GOVERNANCE_ROLE, msg.sender);
+        treasuryAddress = msg.sender; // default; should be set post-deploy via governance to TREASURY_ADDRESS
     }
     
     /**
@@ -351,9 +354,15 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      * @return address Address to send slashed tokens
      */
     function getSlashAddress() internal view returns (address) {
-        // Return governance contract address or treasury if available
-        // For now, return this contract address as a safe fallback
-        return address(this);
+        return treasuryAddress;
+    }
+
+    /**
+     * @dev Sets the treasury address that receives slashed tokens
+     */
+    function setTreasuryAddress(address newTreasury) external onlyRole(GOVERNANCE_ROLE) {
+        require(newTreasury != address(0), "Invalid treasury");
+        treasuryAddress = newTreasury;
     }
     
     /**

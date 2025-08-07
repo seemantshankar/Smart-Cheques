@@ -5,6 +5,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 
@@ -15,7 +16,8 @@ import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable
 contract SmartChequeEscrow is 
     Initializable, 
     ReentrancyGuardUpgradeable,
-    EIP712Upgradeable 
+    EIP712Upgradeable,
+    AccessControlUpgradeable
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using ECDSAUpgradeable for bytes32;
@@ -39,6 +41,12 @@ contract SmartChequeEscrow is
     bool public isLocked;
     bool public isFinalized;
 
+    // Roles
+    bytes32 public constant DISPUTE_MANAGER_ROLE = keccak256("DISPUTE_MANAGER_ROLE");
+
+    // External integrations
+    address public obligationRegistry;
+
     // OffChainSigned state
     AuthorizationMode public authorizationMode;
     address public signer; // address whose signatures are valid
@@ -48,6 +56,7 @@ contract SmartChequeEscrow is
 
     event FundsLocked(address indexed buyer, uint256 amount);
     event MilestoneCompleted(uint256 indexed milestoneIndex, uint256 amount);
+    event MilestoneVerification(uint256 indexed milestoneIndex, bytes32 indexed obligationId, bool success, bytes32 proofHash);
     event DisputeRaised(uint256 indexed milestoneIndex, address initiator);
     event DisputeResolved(uint256 indexed milestoneIndex, bool releaseFunds);
     event FundsReleased(address indexed seller, uint256 amount);
@@ -87,6 +96,7 @@ contract SmartChequeEscrow is
     ) public initializer {
         __ReentrancyGuard_init();
         __EIP712_init("SmartChequeEscrow", "1");
+        __AccessControl_init();
 
         buyer = _buyer;
         seller = _seller;
@@ -107,6 +117,9 @@ contract SmartChequeEscrow is
         isFinalized = false;
         authorizationMode = AuthorizationMode.None;
         signer = address(0);
+
+        // Grant roles
+        _grantRole(DEFAULT_ADMIN_ROLE, _buyer);
     }
 
     /**
@@ -173,9 +186,34 @@ contract SmartChequeEscrow is
         );
     }
 
-    // Basic placeholder for on-chain proof verification; currently returns true to allow off-chain signed flow
-    function _verifyMilestone(uint256 /*milestoneIndex*/, bytes calldata /*proof*/ ) internal pure returns (bool) {
-        return true;
+    // Minimal interface for registry
+    interface IObligationRegistry {
+        function verifyObligation(bytes32 obligationId) external returns (bool);
+        function getObligation(bytes32 obligationId) external view returns (
+            bytes32 hash,
+            address oracleAddress,
+            bytes4 oracleFunction,
+            bytes memory parameters,
+            bool isVerified,
+            uint256 verificationTimestamp
+        );
+    }
+
+    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal returns (bool) {
+        bytes32 obligationId = milestones[milestoneIndex].obligationHash;
+        bool success = true;
+        if (obligationRegistry != address(0)) {
+            IObligationRegistry reg = IObligationRegistry(obligationRegistry);
+            // If already verified, skip call; else attempt verification
+            (, , , , bool isVerified, ) = reg.getObligation(obligationId);
+            if (!isVerified) {
+                success = reg.verifyObligation(obligationId);
+            } else {
+                success = true;
+            }
+        }
+        emit MilestoneVerification(milestoneIndex, obligationId, success, keccak256(proof));
+        return success;
     }
 
     /**
@@ -236,8 +274,7 @@ contract SmartChequeEscrow is
     function resolveDispute(
         uint256 milestoneIndex,
         bool releaseFunds
-    ) external nonReentrant notFinalized {
-        // TODO: Add proper authorization for dispute resolution
+    ) external nonReentrant notFinalized onlyRole(DISPUTE_MANAGER_ROLE) {
         require(milestoneIndex < milestones.length, "Invalid milestone index");
         require(milestones[milestoneIndex].isDisputed, "No dispute raised");
 
@@ -255,6 +292,48 @@ contract SmartChequeEscrow is
         }
 
         emit DisputeResolved(milestoneIndex, releaseFunds);
+    }
+
+    /**
+     * @dev Executes a partial release resolution for a disputed milestone
+     * @param milestoneIndex Index of the milestone
+     * @param amountToSeller Amount to transfer to seller; remainder is refunded to buyer
+     */
+    function resolvePartialRelease(uint256 milestoneIndex, uint256 amountToSeller) external nonReentrant notFinalized onlyRole(DISPUTE_MANAGER_ROLE) {
+        require(milestoneIndex < milestones.length, "Invalid milestone index");
+        Milestone storage milestone = milestones[milestoneIndex];
+        require(milestone.isDisputed, "No dispute raised");
+        require(!milestone.isCompleted, "Milestone already completed");
+        require(amountToSeller <= milestone.amount, "Amount exceeds milestone");
+
+        milestone.isDisputed = false;
+        milestone.isCompleted = amountToSeller == milestone.amount;
+
+        if (amountToSeller > 0) {
+            token.safeTransfer(seller, amountToSeller);
+            emit FundsReleased(seller, amountToSeller);
+        }
+        uint256 refund = milestone.amount - amountToSeller;
+        if (refund > 0) {
+            token.safeTransfer(buyer, refund);
+            emit FundsRefunded(buyer, refund);
+        }
+
+        emit DisputeResolved(milestoneIndex, amountToSeller > 0);
+    }
+
+    /**
+     * @dev Sets the obligation registry address for verification, only buyer can set
+     */
+    function setObligationRegistry(address registry) external onlyBuyer {
+        obligationRegistry = registry;
+    }
+
+    /**
+     * @dev Grants dispute manager role to an address, only buyer can set per-escrow
+     */
+    function setDisputeManager(address disputeManager) external onlyBuyer {
+        _grantRole(DISPUTE_MANAGER_ROLE, disputeManager);
     }
 
     /**

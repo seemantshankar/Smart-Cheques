@@ -30,7 +30,9 @@ interface Milestone {
   description: string;
   obligation: string;
   isCompleted: boolean;
+  isDisputed?: boolean;
   proof?: string;
+  verification?: 'pending' | 'verified';
 }
 
 interface Cheque {
@@ -54,6 +56,9 @@ const ChequeDetails = () => {
   const [completing, setCompleting] = useState(false);
   const [selectedMilestone, setSelectedMilestone] = useState<number | null>(null);
   const [proof, setProof] = useState('');
+  const [disputeOpen, setDisputeOpen] = useState(false);
+  const [disputeReason, setDisputeReason] = useState('');
+  const [disputeEvidence, setDisputeEvidence] = useState('');
 
   useEffect(() => {
     fetchChequeDetails();
@@ -144,6 +149,30 @@ const ChequeDetails = () => {
     setSelectedMilestone(index);
     setProof('');
     onOpen();
+  };
+
+  const handleOpenDispute = async () => {
+    if (!cheque || selectedMilestone === null) return;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/disputes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chequeAddress: cheque.address,
+          milestoneId: selectedMilestone,
+          reason: disputeReason,
+          evidence: disputeEvidence
+        })
+      });
+      if (!res.ok) throw new Error('Failed to open dispute');
+      toast({ title: 'Dispute opened', status: 'success', duration: 4000, isClosable: true });
+      setDisputeOpen(false);
+      setDisputeReason('');
+      setDisputeEvidence('');
+      fetchChequeDetails();
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to open dispute', status: 'error', duration: 5000, isClosable: true });
+    }
   };
 
   if (loading) {
@@ -245,19 +274,34 @@ const ChequeDetails = () => {
                   Obligation: {milestone.obligation}
                 </Text>
 
+                <Text color={milestone.verification === 'verified' ? 'green.600' : 'yellow.600'} fontSize="sm" mb={2}>
+                  Verification: {milestone.verification === 'verified' ? 'Verified' : 'Pending'}
+                </Text>
+
                 {milestone.proof && (
                   <Text color="gray.500" fontSize="sm" mb={2}>
                     Proof: {milestone.proof}
                   </Text>
                 )}
 
-                {!milestone.isCompleted && account === cheque.seller && (
+                {!milestone.isCompleted && account === cheque.seller && !milestone.isDisputed && (
                   <Button
                     size="sm"
                     colorScheme="blue"
                     onClick={() => openCompleteMilestoneModal(index)}
                   >
                     Complete Milestone
+                  </Button>
+                )}
+
+                {!milestone.isCompleted && !milestone.isDisputed && account === cheque.buyer && (
+                  <Button
+                    ml={2}
+                    size="sm"
+                    colorScheme="red"
+                    onClick={() => { setSelectedMilestone(index); setDisputeOpen(true);} }
+                  >
+                    Raise Dispute
                   </Button>
                 )}
               </Box>
@@ -293,6 +337,33 @@ const ChequeDetails = () => {
             >
               Submit
             </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal isOpen={disputeOpen} onClose={() => setDisputeOpen(false)}>
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Open Dispute</ModalHeader>
+          <ModalBody>
+            <VStack spacing={4} align="stretch">
+              <Textarea
+                value={disputeReason}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDisputeReason(e.target.value)}
+                placeholder="Reason for dispute"
+              />
+              <Textarea
+                value={disputeEvidence}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDisputeEvidence(e.target.value)}
+                placeholder="Evidence (links, notes, etc.)"
+              />
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={() => setDisputeOpen(false)}>
+              Cancel
+            </Button>
+            <Button colorScheme="red" onClick={handleOpenDispute}>Submit</Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title ERC20Bridge
@@ -394,13 +395,7 @@ contract ERC20Bridge is
         bytes32 newRoot,
         ValidatorSignature[] calldata validatorSignatures
     ) external onlyRole(RELAYER_ROLE) {
-        bytes32 updateId = keccak256(
-            abi.encodePacked(
-                "UPDATE_ROOT",
-                newRoot,
-                block.timestamp
-            )
-        );
+        bytes32 updateId = keccak256(abi.encodePacked("UPDATE_ROOT", newRoot));
         
         _verifyValidatorQuorum(updateId, validatorSignatures);
         
@@ -421,22 +416,22 @@ contract ERC20Bridge is
         ValidatorSignature[] calldata signatures
     ) internal {
         uint256 validStake = 0;
-        
+
         for (uint256 i = 0; i < signatures.length; i++) {
             address validator = signatures[i].validator;
-            
             if (!hasRole(VALIDATOR_ROLE, validator)) continue;
             if (validatorVotes[operationId][validator]) continue;
-            
-            // Verify signature (simplified - should use proper signature verification)
+
+            bytes32 messageHash = ECDSA.toEthSignedMessageHash(operationId);
+            address recovered = ECDSA.recover(messageHash, signatures[i].signature);
+            if (recovered != validator) continue;
+
             validatorVotes[operationId][validator] = true;
             validStake += validatorStakes[validator];
         }
-        
+
         uint256 requiredStake = (totalValidatorStake * VALIDATOR_QUORUM) / 100;
-        if (validStake < requiredStake) {
-            revert InsufficientValidatorQuorum();
-        }
+        if (validStake < requiredStake) revert InsufficientValidatorQuorum();
     }
 
     /**

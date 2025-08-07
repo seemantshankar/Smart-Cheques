@@ -9,7 +9,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
-      - REACT_APP_API_URL=http://localhost:4000
+      - VITE_API_URL=http://localhost:4000
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -25,12 +25,17 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=4000
+      - RPC_URL=http://localhost:8545
+      - PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
+      - FACTORY_ADDRESS=0x0000000000000000000000000000000000000000
+      - OBLIGATION_REGISTRY_ADDRESS=0x0000000000000000000000000000000000000000
+      - DISPUTE_MANAGER_ADDRESS=0x0000000000000000000000000000000000000000
+      - START_BLOCK=0
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=smart_cheques
       - DB_USER=postgres
       - DB_PASSWORD=postgres
-      - REDIS_URL=redis://redis:6379
     volumes:
       - ./src:/app
       - /app/node_modules

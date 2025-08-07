@@ -81,6 +81,7 @@ contract DisputeManager is
     // Panel configurations
     mapping(bytes32 => PanelConfig) public panelConfigs;
     bytes32[] public activePanels;
+    address[] public registeredArbitrators;
     
     // Default panel settings
     uint256 public defaultPanelSize;
@@ -159,6 +160,7 @@ contract DisputeManager is
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
         _grantRole(PANEL_MANAGER_ROLE, msg.sender);
+        _grantRole(ARBITRATOR_ROLE, msg.sender);
 
         // Set default timeframes
         reviewPeriod = 2 days;
@@ -168,6 +170,18 @@ contract DisputeManager is
         // Set default panel settings
         defaultPanelSize = 3;
         defaultThreshold = 2; // Majority voting
+    }
+
+    function registerArbitrators(address[] calldata arbitrators) external onlyRole(PANEL_MANAGER_ROLE) {
+        for (uint256 i = 0; i < arbitrators.length; i++) {
+            address arb = arbitrators[i];
+            require(hasRole(ARBITRATOR_ROLE, arb), "Not arbitrator role");
+            registeredArbitrators.push(arb);
+        }
+    }
+
+    function getRegisteredArbitrators() external view returns (address[] memory) {
+        return registeredArbitrators;
     }
 
     /**
@@ -225,6 +239,15 @@ contract DisputeManager is
         return disputeId;
     }
 
+    modifier onlyParticipant(address chequeContract) {
+        SmartChequeEscrow cheque = SmartChequeEscrow(chequeContract);
+        require(
+            msg.sender == cheque.buyer() || msg.sender == cheque.seller(),
+            "Only buyer or seller"
+        );
+        _;
+    }
+
     /**
      * @dev Proposes a resolution for a dispute
      * @param disputeId ID of the dispute
@@ -270,7 +293,7 @@ contract DisputeManager is
         } else if (dispute.proposedResolution == ResolutionType.RefundBuyer) {
             cheque.resolveDispute(dispute.milestoneIndex, false);
         } else if (dispute.proposedResolution == ResolutionType.PartialRelease) {
-            // TODO: Implement partial release logic
+            cheque.resolvePartialRelease(dispute.milestoneIndex, dispute.proposedAmount);
         }
 
         emit DisputeResolved(
@@ -288,7 +311,7 @@ contract DisputeManager is
     function escalateDispute(
         bytes32 disputeId,
         address arbitrator
-    ) external whenNotPaused nonReentrant {
+    ) external whenNotPaused nonReentrant onlyParticipant(disputes[disputeId].chequeContract) {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.status == DisputeStatus.Opened, "Invalid dispute status");
         require(hasRole(ARBITRATOR_ROLE, arbitrator), "Invalid arbitrator");
@@ -308,7 +331,7 @@ contract DisputeManager is
     function escalateDisputeToPanel(
         bytes32 disputeId,
         bytes32 panelId
-    ) external whenNotPaused nonReentrant {
+    ) external whenNotPaused nonReentrant onlyParticipant(disputes[disputeId].chequeContract) {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.status == DisputeStatus.Opened, "Invalid dispute status");
         
@@ -352,6 +375,9 @@ contract DisputeManager is
         require(dispute.arbitratorPanel.length > 0, "No panel assigned");
         require(_isArbitratorInPanel(disputeId, msg.sender), "Not in assigned panel");
         require(!disputeVotes[disputeId][msg.sender].hasVoted, "Already voted");
+        if (resolutionType == ResolutionType.PartialRelease) {
+            require(amount > 0 && amount <= SmartChequeEscrow(dispute.chequeContract).getMilestone(dispute.milestoneIndex), "Invalid amount");
+        }
         
         // Record the vote
         disputeVotes[disputeId][msg.sender] = ArbitratorVote({
@@ -625,17 +651,15 @@ contract DisputeManager is
      * @dev Selects a random panel from available arbitrators
      */
     function _selectRandomPanel() internal view returns (address[] memory, uint256) {
-        // Get all members with ARBITRATOR_ROLE
-        // Note: This is a simplified implementation. In production, you might want
-        // to maintain a separate registry of available arbitrators for efficiency
-        
-        address[] memory availableArbitrators = new address[](defaultPanelSize);
-        
-        // This is a placeholder implementation
-        // In a real implementation, you would maintain a list of active arbitrators
-        // and use a more sophisticated selection algorithm
-        
-        return (availableArbitrators, defaultThreshold);
+        uint256 n = registeredArbitrators.length;
+        require(n >= defaultPanelSize, "Insufficient arbitrators");
+        address[] memory panel = new address[](defaultPanelSize);
+        uint256 seed = uint256(keccak256(abi.encodePacked(block.prevrandao, block.timestamp, n)));
+        for (uint256 i = 0; i < defaultPanelSize; i++) {
+            uint256 idx = uint256(keccak256(abi.encode(seed, i))) % n;
+            panel[i] = registeredArbitrators[idx];
+        }
+        return (panel, defaultThreshold);
     }
 
     /**
@@ -682,7 +706,7 @@ contract DisputeManager is
         } else if (dispute.proposedResolution == ResolutionType.RefundBuyer) {
             cheque.resolveDispute(dispute.milestoneIndex, false);
         } else if (dispute.proposedResolution == ResolutionType.PartialRelease) {
-            // TODO: Implement partial release logic
+            cheque.resolvePartialRelease(dispute.milestoneIndex, dispute.proposedAmount);
         }
         
         emit DisputeResolved(

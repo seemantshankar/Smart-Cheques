@@ -51,6 +51,7 @@ const DisputeManager = () => {
     amount: '0'
   });
   const [resolving, setResolving] = useState(false);
+  const [form, setForm] = useState({ chequeAddress: '', milestoneId: '', reason: '', evidence: '' });
 
   useEffect(() => {
     if (!account || !provider) return;
@@ -62,7 +63,7 @@ const DisputeManager = () => {
     if (!account || !provider) return;
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/disputes?address=${account}`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/disputes?address=${account}`);
 
       // If the API returns a non-OK status, only show an error toast for real failures (not empty states)
       if (!response.ok) {
@@ -104,6 +105,39 @@ const DisputeManager = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openDispute = async (chequeAddress: string, milestoneId: string, reason: string, evidence: string) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/disputes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chequeAddress, milestoneId: parseInt(milestoneId), reason, evidence })
+      });
+      if (!res.ok) throw new Error('Failed to open dispute');
+      await fetchDisputes();
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to open dispute', status: 'error' });
+    }
+  };
+
+  const escalateToPanel = async (disputeId: string) => {
+    if (!provider) return;
+    try {
+      const contract = new ethers.Contract(
+        import.meta.env.VITE_DISPUTE_MANAGER_ADDRESS!,
+        [
+          'function escalateDisputeToPanel(bytes32,bytes32) external',
+        ],
+        provider.getSigner()
+      );
+      const tx = await contract.escalateDisputeToPanel(disputeId, ethers.constants.HashZero);
+      await tx.wait();
+      toast({ title: 'Escalated', description: 'Dispute escalated to panel', status: 'success' });
+      fetchDisputes();
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to escalate dispute', status: 'error' });
     }
   };
 
