@@ -5,6 +5,8 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 
 /**
  * @title SmartChequeEscrow
@@ -12,9 +14,11 @@ import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
  */
 contract SmartChequeEscrow is 
     Initializable, 
-    ReentrancyGuardUpgradeable 
+    ReentrancyGuardUpgradeable,
+    EIP712Upgradeable 
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
+    using ECDSAUpgradeable for bytes32;
 
     struct Milestone {
         uint256 amount;
@@ -22,6 +26,8 @@ contract SmartChequeEscrow is
         bool isCompleted;
         bool isDisputed;
     }
+
+    enum AuthorizationMode { None, OffChainSigned }
 
     address public buyer;
     address public seller;
@@ -33,6 +39,13 @@ contract SmartChequeEscrow is
     bool public isLocked;
     bool public isFinalized;
 
+    // OffChainSigned state
+    AuthorizationMode public authorizationMode;
+    address public signer; // address whose signatures are valid
+
+    // Replay protection mapping: cheque/escrow id + milestone index => consumed
+    mapping(bytes32 => bool) public consumedAuthorizations;
+
     event FundsLocked(address indexed buyer, uint256 amount);
     event MilestoneCompleted(uint256 indexed milestoneIndex, uint256 amount);
     event DisputeRaised(uint256 indexed milestoneIndex, address initiator);
@@ -40,8 +53,18 @@ contract SmartChequeEscrow is
     event FundsReleased(address indexed seller, uint256 amount);
     event FundsRefunded(address indexed buyer, uint256 amount);
 
+    // OffChainSigned events
+    event AuthorizationModeUpdated(AuthorizationMode mode);
+    event SignerUpdated(address indexed signer);
+    event AuthorizationConsumed(bytes32 indexed authHash, uint256 indexed milestoneIndex);
+
     modifier onlyBuyer() {
         require(msg.sender == buyer, "Only buyer can call this");
+        _;
+    }
+
+    modifier onlyBuyerOrSeller() {
+        require(msg.sender == buyer || msg.sender == seller, "Unauthorized");
         _;
     }
 
@@ -63,6 +86,7 @@ contract SmartChequeEscrow is
         bytes32[] memory _obligations
     ) public initializer {
         __ReentrancyGuard_init();
+        __EIP712_init("SmartChequeEscrow", "1");
 
         buyer = _buyer;
         seller = _seller;
@@ -81,6 +105,24 @@ contract SmartChequeEscrow is
 
         isLocked = false;
         isFinalized = false;
+        authorizationMode = AuthorizationMode.None;
+        signer = address(0);
+    }
+
+    /**
+     * @dev Set authorization mode. Only buyer may change.
+     */
+    function setAuthorizationMode(AuthorizationMode mode) external onlyBuyer {
+        authorizationMode = mode;
+        emit AuthorizationModeUpdated(mode);
+    }
+
+    /**
+     * @dev Set the off-chain signer address. Only buyer may change.
+     */
+    function setSigner(address _signer) external onlyBuyer {
+        signer = _signer;
+        emit SignerUpdated(_signer);
     }
 
     /**
@@ -101,23 +143,56 @@ contract SmartChequeEscrow is
     }
 
     /**
-     * @dev Completes a milestone and releases funds to seller
-     * @param milestoneIndex Index of the milestone
+     * @dev EIP-712 typehash and digest for milestone authorization
+     * Typed fields: contract, chainId, escrowId, milestoneIndex, amount, recipient, deadline
+     */
+    bytes32 private constant MILESTONE_TYPEHASH = keccak256(
+        "MilestoneAuthorization(address contractAddress,uint256 chainId,bytes32 escrowId,uint256 milestoneIndex,uint256 amount,address recipient,uint256 deadline)"
+    );
+
+    function _hashMilestone(
+        bytes32 escrowId,
+        uint256 milestoneIndex,
+        uint256 amount,
+        address recipient,
+        uint256 deadline
+    ) internal view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    MILESTONE_TYPEHASH,
+                    address(this),
+                    block.chainid,
+                    escrowId,
+                    milestoneIndex,
+                    amount,
+                    recipient,
+                    deadline
+                )
+            )
+        );
+    }
+
+    // Basic placeholder for on-chain proof verification; currently returns true to allow off-chain signed flow
+    function _verifyMilestone(uint256 /*milestoneIndex*/, bytes calldata /*proof*/ ) internal pure returns (bool) {
+        return true;
+    }
+
+    /**
+     * @dev Marks a milestone as completed and releases payment
+     * @param milestoneIndex Index of the milestone to complete
      * @param proof Proof of milestone completion
      */
-    function completeMilestone(
+    function _completeMilestone(
         uint256 milestoneIndex,
         bytes calldata proof
-    ) external nonReentrant notFinalized {
-        require(isLocked, "Funds not locked");
+    ) internal {
         require(milestoneIndex < milestones.length, "Invalid milestone index");
-        require(!milestones[milestoneIndex].isCompleted, "Milestone already completed");
-        require(!milestones[milestoneIndex].isDisputed, "Milestone is disputed");
-
-        // Verify milestone completion (to be implemented with oracle integration)
+        Milestone storage milestone = milestones[milestoneIndex];
+        require(!milestone.isCompleted, "Milestone already completed");
+        require(!milestone.isDisputed, "Milestone is disputed");
         require(_verifyMilestone(milestoneIndex, proof), "Invalid milestone proof");
 
-        Milestone storage milestone = milestones[milestoneIndex];
         milestone.isCompleted = true;
 
         // Release funds for this milestone
@@ -125,7 +200,7 @@ contract SmartChequeEscrow is
 
         emit MilestoneCompleted(milestoneIndex, milestone.amount);
 
-        // Check if all milestones are completed
+        // Finalize if all milestones are completed
         bool allCompleted = true;
         for (uint256 i = 0; i < milestones.length; i++) {
             if (!milestones[i].isCompleted) {
@@ -133,7 +208,6 @@ contract SmartChequeEscrow is
                 break;
             }
         }
-
         if (allCompleted) {
             isFinalized = true;
         }
@@ -145,8 +219,7 @@ contract SmartChequeEscrow is
      */
     function raiseDispute(
         uint256 milestoneIndex
-    ) external nonReentrant notFinalized {
-        require(msg.sender == buyer || msg.sender == seller, "Unauthorized");
+    ) external onlyBuyerOrSeller nonReentrant notFinalized {
         require(milestoneIndex < milestones.length, "Invalid milestone index");
         require(!milestones[milestoneIndex].isCompleted, "Milestone already completed");
         require(!milestones[milestoneIndex].isDisputed, "Dispute already raised");
@@ -210,17 +283,70 @@ contract SmartChequeEscrow is
     function getMilestoneCount() external view returns (uint256) {
         return milestones.length;
     }
-
-    /**
-     * @dev Internal function to verify milestone completion
-     * @param milestoneIndex Index of the milestone
-     * @param proof Proof of milestone completion
-     */
-    function _verifyMilestone(
+    
+    function completeMilestone(
         uint256 milestoneIndex,
         bytes calldata proof
-    ) internal view returns (bool) {
-        // TODO: Implement verification logic with oracle integration
-        return true;
+    ) external nonReentrant notFinalized {
+        require(isLocked, "Funds not locked");
+        _completeMilestone(milestoneIndex, proof);
     }
+
+    /**
+     * @dev Complete milestone via off-chain authorization signature
+     * @param escrowId Unique id for cheque/escrow (bytes32)
+     * @param milestoneIndex Milestone index
+     * @param recipient Payment recipient (usually seller)
+     * @param deadline Expiration timestamp for the authorization
+     * @param signature EIP-712 signature from signer
+     */
+    function completeMilestoneWithSignature(
+        bytes32 escrowId,
+        uint256 milestoneIndex,
+        address recipient,
+        uint256 deadline,
+        bytes calldata signature
+    ) external nonReentrant notFinalized {
+        require(isLocked, "Funds not locked");
+        require(authorizationMode == AuthorizationMode.OffChainSigned, "OffChainSigned disabled");
+        require(signer != address(0), "Signer not set");
+        require(block.timestamp <= deadline, "Authorization expired");
+        require(milestoneIndex < milestones.length, "Invalid milestone index");
+
+        Milestone storage milestone = milestones[milestoneIndex];
+        require(!milestone.isCompleted, "Milestone already completed");
+        require(!milestone.isDisputed, "Milestone is disputed");
+        require(recipient == seller, "Invalid recipient");
+
+        bytes32 digest = _hashMilestone(escrowId, milestoneIndex, milestone.amount, recipient, deadline);
+        address recovered = ECDSAUpgradeable.recover(digest, signature);
+        require(recovered == signer, "Invalid signature");
+
+        // Enhanced authorization replay protection
+        bytes32 authHash = keccak256(abi.encodePacked(digest, milestoneIndex, block.chainid));
+        require(!consumedAuthorizations[authHash], "Authorization already used");
+        
+        // Check milestone hasn't been completed
+        require(!milestone.isCompleted, "Milestone already completed");
+        
+        // Mark authorization as used and milestone as completed
+        consumedAuthorizations[authHash] = true;
+        milestone.isCompleted = true;
+        
+        emit AuthorizationConsumed(authHash, milestoneIndex);
+        token.safeTransfer(recipient, milestone.amount);
+        emit MilestoneCompleted(milestoneIndex, milestone.amount);
+
+        bool allCompleted = true;
+        for (uint256 i = 0; i < milestones.length; i++) {
+            if (!milestones[i].isCompleted) {
+                allCompleted = false;
+                break;
+            }
+        }
+        if (allCompleted) {
+            isFinalized = true;
+        }
+    }
+
 }

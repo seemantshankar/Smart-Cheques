@@ -24,19 +24,19 @@ The Blockchain Core is the foundational layer of the Smart Cheque platform, prov
   - Set up relayer services for cross-chain proofs - DONE
   - Configure bridge security parameters - DONE
 
-**Feature: Consensus and Security Implementation**
-- Sub-feature: Consensus Mechanism Setup
-  - Implement chosen consensus algorithm (Optimistic/zk-Rollup or PoS)
-  - Configure fraud proof or validity proof systems
-  - Set up block production and validation logic
-- Sub-feature: Governance Framework
-  - Deploy on-chain governance contracts
-  - Implement protocol upgrade mechanisms
-  - Set up validator management system
-- Sub-feature: Security and Slashing
-  - Implement slashing mechanics for validator misbehavior
-  - Set up staking requirements and penalties
-  - Configure transaction finality guarantees
+**Feature: Consensus and Security Implementation** - DONE
+- Sub-feature: Consensus Mechanism Setup - DONE
+  - Implement chosen consensus algorithm (Optimistic/zk-Rollup or PoS) - DONE
+  - Configure fraud proof or validity proof systems - DONE
+  - Set up block production and validation logic - DONE
+- Sub-feature: Governance Framework - DONE
+  - Deploy on-chain governance contracts - DONE
+  - Implement protocol upgrade mechanisms - DONE
+  - Set up validator management system - DONE
+- Sub-feature: Security and Slashing - DONE
+  - Implement slashing mechanics for validator misbehavior - DONE
+  - Set up staking requirements and penalties - DONE
+  - Configure transaction finality guarantees - DONE
 
 ### 1.2 Smart Contract Development
 

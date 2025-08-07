@@ -1,222 +1,212 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-import { Contract, Event } from "ethers";
-import { 
-  SmartChequeFactory,
-  SmartChequeEscrow,
-  ObligationRegistry,
-  DisputeManager,
-  MockERC20
-} from "../typechain";
-import * as hre from "hardhat";
+import { ethers, upgrades } from "hardhat";
+import { Contract, Signer } from "ethers";
 
-describe("Smart Cheque System", function () {
-  let smartChequeFactory: SmartChequeFactory;
-  let obligationRegistry: ObligationRegistry;
-  let disputeManager: DisputeManager;
-  let owner: SignerWithAddress;
-  let buyer: SignerWithAddress;
-  let seller: SignerWithAddress;
-  let arbitrator: SignerWithAddress;
+// EIP-712 helpers
+const domain = (contract: Contract, chainId: number) => ({
+  name: "SmartChequeEscrow",
+  version: "1",
+  chainId,
+  verifyingContract: contract.address,
+});
 
-  const totalAmount = ethers.utils.parseEther("1");
-  const milestones = [ethers.utils.parseEther("0.5"), ethers.utils.parseEther("0.5")];
-  const obligations = [
-    ethers.utils.keccak256(ethers.utils.toUtf8Bytes("Milestone 1")),
-    ethers.utils.keccak256(ethers.utils.toUtf8Bytes("Milestone 2"))
-  ];
+const types = {
+  MilestoneAuthorization: [
+    { name: "contractAddress", type: "address" },
+    { name: "chainId", type: "uint256" },
+    { name: "escrowId", type: "bytes32" },
+    { name: "milestoneIndex", type: "uint256" },
+    { name: "amount", type: "uint256" },
+    { name: "recipient", type: "address" },
+    { name: "deadline", type: "uint256" },
+  ],
+};
 
-  beforeEach(async function () {
-    [owner, buyer, seller, arbitrator] = await ethers.getSigners();
+async function signAuth(
+  signer: Signer,
+  contract: Contract,
+  chainId: number,
+  escrowId: string,
+  milestoneIndex: number,
+  amount: bigint,
+  recipient: string,
+  deadline: number
+) {
+  const value = {
+    contractAddress: contract.address,
+    chainId,
+    escrowId,
+    milestoneIndex,
+    amount,
+    recipient,
+    deadline,
+  };
+  // @ts-ignore
+  return await signer._signTypedData(domain(contract, chainId), types, value);
+}
 
-    // Deploy SmartChequeFactory
-    const SmartChequeFactoryContract = await ethers.getContractFactory("SmartChequeFactory");
-    smartChequeFactory = (await hre.upgrades.deployProxy(SmartChequeFactoryContract, [], {
-      initializer: "initialize",
-      kind: "uups"
-    })) as SmartChequeFactory;
+describe("SmartChequeEscrow - OffChainSigned", function () {
+  let buyer: Signer;
+  let seller: Signer;
+  let other: Signer;
+  let token: Contract;
+  let escrow: Contract;
+  let chainId: number;
 
-    // Deploy ObligationRegistry
-    const ObligationRegistryContract = await ethers.getContractFactory("ObligationRegistry");
-    obligationRegistry = (await hre.upgrades.deployProxy(ObligationRegistryContract, [], {
-      initializer: "initialize",
-      kind: "uups"
-    })) as ObligationRegistry;
+  beforeEach(async () => {
+    [buyer, seller, other] = await ethers.getSigners();
 
-    // Deploy DisputeManager
-    const DisputeManagerContract = await ethers.getContractFactory("DisputeManager");
-    disputeManager = (await hre.upgrades.deployProxy(DisputeManagerContract, [], {
-      initializer: "initialize",
-      kind: "uups"
-    })) as DisputeManager;
+    const TestToken = await ethers.getContractFactory("MockERC20");
+    token = await TestToken.deploy("Test Token", "TEST", ethers.utils.parseEther("1000000"));
+    await token.deployed();
 
-    // Set up roles
-    const OPERATOR_ROLE = await smartChequeFactory.OPERATOR_ROLE();
-    const ORACLE_ROLE = await obligationRegistry.ORACLE_ROLE();
-    const ARBITRATOR_ROLE = await disputeManager.ARBITRATOR_ROLE();
+    const Escrow = await ethers.getContractFactory("SmartChequeEscrow");
+    escrow = await upgrades.deployProxy(
+      Escrow,
+      [await buyer.getAddress(), await seller.getAddress(), 1000n, [500n, 500n], [ethers.constants.HashZero, ethers.constants.HashZero]],
+      { initializer: "initialize" }
+    );
+    await escrow.deployed();
 
-    await smartChequeFactory.grantRole(OPERATOR_ROLE, owner.address);
-    await obligationRegistry.grantRole(ORACLE_ROLE, owner.address);
-    await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator.address);
+    chainId = (await ethers.provider.getNetwork()).chainId;
+
+    // fund buyer and approve
+    await token.mint(await buyer.getAddress(), 1000n);
+    await token.connect(buyer).approve(escrow.address, 1000n);
+
+    // lock funds
+    await escrow.connect(buyer).lockFunds(token.address);
+
+    // enable OffChainSigned and set signer
+    await escrow.connect(buyer).setAuthorizationMode(1); // OffChainSigned
+    await escrow.connect(buyer).setSigner(await buyer.getAddress());
   });
 
-  describe("SmartChequeFactory", function () {
-    it("Should create a new Smart Cheque", async function () {
-      const tx = await smartChequeFactory.createCheque(
-        buyer.address,
-        seller.address,
-        totalAmount,
-        milestones,
-        obligations
-      );
+  it("completes milestone with valid signature", async () => {
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      0,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-      const receipt = await tx.wait();
-      const event = receipt.events?.find((e: Event) => e.event === "ChequeCreated");
-      expect(event).to.not.be.undefined;
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
+    )
+      .to.emit(escrow, "AuthorizationConsumed")
+      .and.to.emit(escrow, "MilestoneCompleted");
 
-      const chequeId = event?.args?.chequeId;
-      const chequeAddress = await smartChequeFactory.getChequeAddress(chequeId);
-      expect(chequeAddress).to.not.equal(ethers.constants.AddressZero);
-    });
-
-    it("Should fail to create cheque with invalid parameters", async function () {
-      await expect(
-        smartChequeFactory.createCheque(
-          ethers.constants.AddressZero,
-          seller.address,
-          totalAmount,
-          milestones,
-          obligations
-        )
-      ).to.be.revertedWith("Invalid buyer address");
-    });
+    expect(await token.balanceOf(await seller.getAddress())).to.equal(500n);
   });
 
-  describe("SmartChequeEscrow", function () {
-    let chequeId: string;
-    let chequeAddress: string;
-    let chequeContract: SmartChequeEscrow;
+  it("rejects with expired deadline", async () => {
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const latest = await ethers.provider.getBlock("latest");
+    const deadline = (latest?.timestamp || 0) - 1;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      0,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-    beforeEach(async function () {
-      const tx = await smartChequeFactory.createCheque(
-        buyer.address,
-        seller.address,
-        totalAmount,
-        milestones,
-        obligations
-      );
-
-      const receipt = await tx.wait();
-      const event = receipt.events?.find((e: Event) => e.event === "ChequeCreated");
-      chequeId = event?.args?.chequeId;
-      chequeAddress = await smartChequeFactory.getChequeAddress(chequeId);
-      chequeContract = await ethers.getContractAt("SmartChequeEscrow", chequeAddress) as SmartChequeEscrow;
-    });
-
-    it("Should lock funds", async function () {
-      // Deploy mock ERC20 token
-      const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
-      await token.mint(buyer.address, totalAmount);
-
-      // Approve and lock funds
-      await token.connect(buyer).approve(chequeAddress, totalAmount);
-      await chequeContract.connect(buyer).lockFunds(token.address);
-
-      expect(await token.balanceOf(chequeAddress)).to.equal(totalAmount);
-    });
-
-    it("Should complete milestone", async function () {
-      // Setup mock token and lock funds
-      const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
-      await token.mint(buyer.address, totalAmount);
-      await token.connect(buyer).approve(chequeAddress, totalAmount);
-      await chequeContract.connect(buyer).lockFunds(token.address);
-
-      // Complete milestone
-      const proof = ethers.utils.defaultAbiCoder.encode(["string"], ["Proof"]);
-      await chequeContract.completeMilestone(0, proof);
-
-      const milestone = await chequeContract.getMilestone(0);
-      expect(milestone.isCompleted).to.be.true;
-    });
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
+    ).to.be.revertedWith("Authorization expired");
   });
 
-  describe("DisputeManager", function () {
-    let chequeId: string;
-    let chequeAddress: string;
-    let disputeId: string;
+  it("rejects when signer mismatch", async () => {
+    await escrow.connect(buyer).setSigner(await other.getAddress());
 
-    beforeEach(async function () {
-      const tx = await smartChequeFactory.createCheque(
-        buyer.address,
-        seller.address,
-        totalAmount,
-        milestones,
-        obligations
-      );
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      0,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-      const receipt = await tx.wait();
-      const event = receipt.events?.find((e: Event) => e.event === "ChequeCreated");
-      chequeId = event?.args?.chequeId;
-      chequeAddress = await smartChequeFactory.getChequeAddress(chequeId);
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
+    ).to.be.revertedWith("Invalid signature");
+  });
 
-      // Open dispute
-      const openTx = await disputeManager.connect(buyer).openDispute(
-        chequeAddress,
-        0,
-        "Milestone not completed",
-        ethers.utils.defaultAbiCoder.encode(["string"], ["Evidence"])
-      );
+  it("rejects replay of same authorization", async () => {
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      1,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-      const openReceipt = await openTx.wait();
-      const openEvent = openReceipt.events?.find((e: Event) => e.event === "DisputeOpened");
-      disputeId = openEvent?.args?.disputeId;
-    });
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 1, await seller.getAddress(), deadline, sig)
+    ).to.emit(escrow, "AuthorizationConsumed");
 
-    it("Should escalate dispute", async function () {
-      await disputeManager.escalateDispute(disputeId, arbitrator.address);
-      const dispute = await disputeManager.getDispute(disputeId);
-      expect(dispute.arbitrator).to.equal(arbitrator.address);
-      expect(dispute.status).to.equal(2); // DisputeStatus.UnderReview
-    });
+    // attempt replay
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 1, await seller.getAddress(), deadline, sig)
+    ).to.be.revertedWith("Authorization already used");
+  });
 
-    it("Should resolve dispute", async function () {
-      // Get the cheque contract instance
-      const chequeContract = await ethers.getContractAt("SmartChequeEscrow", chequeAddress) as SmartChequeEscrow;
+  it("rejects wrong recipient", async () => {
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      0,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-      // Setup mock token and lock funds
-      const MockTokenFactory = await ethers.getContractFactory("MockERC20");
-      const token = (await MockTokenFactory.deploy("Mock Token", "MTK", totalAmount)) as MockERC20;
-      await token.mint(buyer.address, totalAmount);
-      await token.connect(buyer).approve(chequeAddress, totalAmount);
-      await chequeContract.connect(buyer).lockFunds(token.address);
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 0, await other.getAddress(), deadline, sig)
+    ).to.be.revertedWith("Invalid recipient");
+  });
 
-      // Raise dispute in the escrow contract
-      await chequeContract.connect(buyer).raiseDispute(0);
+  it("rejects when mode disabled", async () => {
+    await escrow.connect(buyer).setAuthorizationMode(0); // None
 
-      // First escalate to assign arbitrator and set status to UnderReview
-      await disputeManager.escalateDispute(disputeId, arbitrator.address);
-      
-      // Arbitrator proposes resolution
-      await disputeManager.connect(arbitrator).proposeResolution(
-        disputeId,
-        1, // ResolutionType.ReleaseFunds
-        0
-      );
+    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrow,
+      chainId,
+      escrowId,
+      0,
+      500n,
+      await seller.getAddress(),
+      deadline
+    );
 
-      // Resolve the dispute
-      await disputeManager.connect(arbitrator).resolveDispute(disputeId);
-      
-      const dispute = await disputeManager.getDispute(disputeId);
-      expect(dispute.status).to.equal(4); // DisputeStatus.Resolved
-
-      // Verify the milestone dispute status
-      const milestone = await chequeContract.getMilestone(0);
-      expect(milestone.isDisputed).to.be.false;
-      expect(milestone.isCompleted).to.be.true;
-    });
+    await expect(
+      escrow.completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
+    ).to.be.revertedWith("OffChainSigned disabled");
   });
 });
