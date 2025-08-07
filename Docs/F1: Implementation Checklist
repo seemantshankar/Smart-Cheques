@@ -571,19 +571,23 @@ The Blockchain Core is the foundational layer of the Smart Cheque platform, prov
 **Data Management:**
 - Database Design and Implementation (Schema Design, Indexing)
 
+**Documentation:**
+- Technical docs and implementation plans curated under Docs/ (Architecture, L2 plan, GOTCHAs)
+
 ### 🔄 IN PROGRESS / PARTIALLY IMPLEMENTED
 
-**Security Features:**
+**Security & Governance:**
 - Timelock-controlled upgrades
 - Multi-signature requirements
 - Formal verification of core contracts
 - Third-party security audits
 
-**Infrastructure:**
+**Infrastructure & Operations:**
 - Blue-green deployment strategy
-- Secrets management
-- Kubernetes manifests and service mesh
-- Image scanning and security
+- Secrets management and key handling
+- Kubernetes manifests and service mesh (planning/docs present; manifests pending)
+- Image scanning and supply-chain security
+- Observability: structured logging in services; tracing/metrics wiring pending rollout
 
 ### ❌ NOT YET IMPLEMENTED
 
@@ -593,27 +597,27 @@ The Blockchain Core is the foundational layer of the Smart Cheque platform, prov
 - Cross-Chain Bridge Development
 - Sequencer and Fraud Proof System
 
-**Advanced Features:**
+**Advanced Platform Features:**
 - Authentication and Authorization (JWT, OAuth2)
-- Rate Limiting and Security
+- Rate Limiting and API Security
 - WebSocket Event System
 - Redis Caching System
-- Comprehensive Monitoring and Alerting
-- Infrastructure as Code (Terraform)
-- Node Operations and Scaling
-- Compliance and Governance
-- Advanced Security Infrastructure
+- Comprehensive Monitoring and Alerting stack
+- Infrastructure as Code (Terraform) for environments
+- Node Operations and Scaling runbooks
+- Compliance and Governance automation
+- Advanced Security Infrastructure (custodian/freeze, allow/block lists)
 
 ### 📊 COMPLETION METRICS
 
-- **Overall Progress:** ~30% Complete
+- **Overall Progress:** ~35% Complete
 - **Smart Contracts:** ~85% Complete
 - **Backend Services:** ~60% Complete
-- **Frontend Application:** ~70% Complete
-- **Testing Infrastructure:** ~80% Complete
-- **DevOps/Infrastructure:** ~40% Complete
+- **Frontend Application:** ~0% Complete (no frontend in repo at this commit)
+- **Testing Infrastructure:** ~75% Complete
+- **DevOps/Infrastructure:** ~45% Complete (Docker + CI present; k8s/TF pending)
 - **Security & Compliance:** ~25% Complete
-- **Documentation:** ~20% Complete
+- **Documentation:** ~40% Complete
 
 ---
 
