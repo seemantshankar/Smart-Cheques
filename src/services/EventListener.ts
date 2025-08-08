@@ -9,12 +9,12 @@ interface ContractConfig {
 }
 
 export class EventListener {
-  private provider: ethers.providers.JsonRpcProvider;
+  private provider: ethers.JsonRpcProvider;
   private contracts: Map<string, ethers.Contract>;
   private chainId: number;
 
   constructor(rpcUrl: string) {
-    this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+    this.provider = new ethers.JsonRpcProvider(rpcUrl);
     this.contracts = new Map();
     this.chainId = 0;
   }
@@ -71,7 +71,7 @@ export class EventListener {
     for (const eventName of events) {
       contract.on(eventName, async (...args) => {
         const event = args[args.length - 1];
-        await this.handleEvent(contract.address, eventName, event);
+        await this.handleEvent(contract.target, eventName, event);
       });
     }
   }
@@ -88,13 +88,13 @@ export class EventListener {
         const events = await contract.queryFilter(filter, startBlock, endBlock);
 
         for (const event of events) {
-          await this.handleEvent(contract.address, eventName, event);
+          await this.handleEvent(contract.target, eventName, event);
         }
       }
     }
   }
 
-  private async handleEvent(contractAddress: string, eventName: string, event: ethers.Event) {
+  private async handleEvent(contractAddress: string, eventName: string, event: ethers.EventLog) {
     try {
       // Store event in database
       await db.createEvent({
@@ -144,7 +144,7 @@ export class EventListener {
     await db.createCheque({
       chain_id: this.chainId,
       cheque_id: chequeId.toString(),
-      contract_address: chequeAddress,
+      contract_address: chequeAddress.target,
       buyer_address: buyer,
       seller_address: seller,
       total_amount: '0', // Will be updated when fetching full details
@@ -189,7 +189,7 @@ export class EventListener {
     await db.createOracleData({
       obligation_hash: obligationId,
       oracle_address: oracleAddress,
-      data_hash: ethers.constants.HashZero,
+      data_hash: ethers.ZeroHash,
       reliability_score: 0
     });
   }

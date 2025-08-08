@@ -170,7 +170,7 @@ contract ObligationRegistry is
         address oracle,
         uint8 newScore
     ) external onlyRole(ADMIN_ROLE) {
-        updateOracleScore(oracle, newScore);
+        this.updateOracleScore(oracle, newScore);
     }
 
     /**

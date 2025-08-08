@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "./ValidatorManager.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ValidatorManager} from "./ValidatorManager.sol";
 
 /**
  * @title ConsensusManager
@@ -15,7 +17,32 @@ import "./ValidatorManager.sol";
 contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     using ECDSA for bytes32;
     
+    // Custom errors
+    error InvalidBlockNumber();
+    error InvalidParentHash();
+    error InvalidProposer();
+    error BlockAlreadyExists();
+    error BlockNotFound();
+    error InvalidSignature();
+    error InsufficientValidators();
+    error BlockAlreadyFinalized();
+    error InvalidFraudProof();
+    error InvalidChallengePeriod();
+    error ChallengeAlreadyExists();
+    error ChallengeNotFound();
+    error InvalidChallengeState();
+    error UnauthorizedAccess();
+    error InvalidTimestamp();
+    error InvalidStateRoot();
+    error InvalidTransactionsRoot();
+    error InvalidReceiptsRoot();
+    error InvalidGasLimit();
+    error InvalidDifficulty();
+    error BlockTooOld();
+    error InvalidValidatorSet();
+    
     // Roles
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
@@ -137,6 +164,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         validatorManager = ValidatorManager(_validatorManager);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(SEQUENCER_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
         
         // Initialize genesis block
         currentBlockNumber = 0;
@@ -160,12 +188,9 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         uint256 gasUsed,
         bytes memory extraData
     ) external onlyRole(SEQUENCER_ROLE) whenNotPaused {
-        require(gasUsed <= baseGasLimit, "Gas limit exceeded");
-        require(extraData.length <= 32, "Extra data too large");
-        require(
-            block.timestamp >= lastProposedBlock[msg.sender] + blockTime,
-            "Block time not elapsed"
-        );
+        if (gasUsed > baseGasLimit) revert InvalidGasLimit();
+        if (extraData.length > 32) revert InvalidDifficulty();
+        if (block.timestamp < lastProposedBlock[msg.sender] + blockTime) revert InvalidTimestamp();
         
         uint256 newBlockNumber = currentBlockNumber + 1;
         
@@ -214,15 +239,15 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         whenNotPaused 
     {
         BlockValidation storage validation = blockValidations[blockHash];
-        require(validation.blockHash != bytes32(0), "Block not found");
-        require(!validation.finalized, "Block already finalized");
-        require(!validation.validatorVotes[msg.sender], "Already validated");
-        require(block.timestamp <= validation.challengeDeadline, "Challenge period expired");
+        if (validation.blockHash == bytes32(0)) revert BlockNotFound();
+        if (validation.finalized) revert BlockAlreadyFinalized();
+        if (validation.validatorVotes[msg.sender]) revert UnauthorizedAccess();
+        if (block.timestamp > validation.challengeDeadline) revert InvalidChallengePeriod();
         
         // Verify signature
         bytes32 messageHash = ECDSA.toEthSignedMessageHash(blockHash);
         address signer = messageHash.recover(signature);
-        require(signer == msg.sender, "Invalid signature");
+        if (signer != msg.sender) revert InvalidSignature();
         
         // Record validation
         validation.validatorVotes[msg.sender] = true;
@@ -253,14 +278,19 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes[] memory merkleProofs
     ) external whenNotPaused {
         BlockValidation storage validation = blockValidations[blockHash];
-        require(validation.blockHash != bytes32(0), "Block not found");
-        require(!validation.finalized, "Block already finalized");
-        require(block.timestamp <= validation.challengeDeadline, "Challenge period expired");
-        require(!validation.challenged, "Already challenged");
-        
-        // Mark as challenged
+        if (validation.blockHash == bytes32(0)) revert BlockNotFound();
+        if (validation.finalized) revert BlockAlreadyFinalized();
+        if (validation.challenged) revert ChallengeAlreadyExists();
+        if (block.timestamp > validation.challengeDeadline) revert InvalidChallengePeriod();
+
+        // Verify caller has sufficient stake
+        (uint256 callerStake, bool isActive) = validatorManager.getValidatorStake(msg.sender);
+        if (callerStake == 0 || !isActive) revert UnauthorizedAccess();
+
+        // Mark as challenged and extend challenge window
         validation.challenged = true;
         validation.challenger = msg.sender;
+        validation.challengeDeadline = block.timestamp + challengePeriod;
         
         // Store fraud proof
         fraudProofs[blockHash] = FraudProof({
@@ -282,11 +312,16 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @dev Verify a fraud proof
      * @param blockHash Hash of the challenged block
      */
-    function verifyFraudProof(bytes32 blockHash) external onlyRole(ORACLE_ROLE) {
+    function verifyFraudProof(bytes32 blockHash) external onlyRole(ORACLE_ROLE) whenNotPaused {
         FraudProof storage proof = fraudProofs[blockHash];
-        require(proof.blockHash != bytes32(0), "Fraud proof not found");
-        require(!proof.resolved, "Fraud proof already resolved");
-        
+        if (proof.blockHash == bytes32(0)) revert InvalidFraudProof();
+        if (proof.verified) revert InvalidFraudProof();
+        if (proof.resolved) revert InvalidFraudProof();
+
+        BlockValidation storage validation = blockValidations[blockHash];
+        if (!validation.challenged) revert ChallengeNotFound();
+        if (block.timestamp > validation.challengeDeadline) revert InvalidChallengePeriod();
+
         // Verify the fraud proof (simplified - in production would need full verification)
         bool isValid = _verifyStateTransition(
             proof.stateTransition,
@@ -309,6 +344,14 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             
             // Revert to previous state
             _revertToBlock(header.blockNumber - 1);
+            
+            // Reward the challenger
+            (uint256 challengerStake, bool challengerActive) = validatorManager.getValidatorStake(proof.challenger);
+            if (challengerStake > 0 && challengerActive) {
+                // Transfer reward to challenger
+                IERC20 governanceToken = IERC20(address(validatorManager.governanceToken()));
+                SafeERC20.safeTransfer(governanceToken, proof.challenger, challengerStake / 10);
+            }
         } else {
             // Fraud proof invalid - slash the challenger
             validatorManager.slashValidator(
@@ -326,8 +369,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @param blockNumber Block number to checkpoint
      */
     function createCheckpoint(uint256 blockNumber) external onlyRole(ORACLE_ROLE) {
-        require(blockNumber <= lastFinalizedBlock, "Block not finalized");
-        require(blockNumber >= lastCheckpointBlock + checkpointInterval, "Too early for checkpoint");
+        if (blockNumber > lastFinalizedBlock) revert BlockNotFound();
+        if (blockNumber < lastCheckpointBlock + checkpointInterval) revert BlockTooOld();
         
         BlockHeader memory header = blockHeaders[blockNumber];
         bytes32 validatorSetHash = _calculateValidatorSetHash();
@@ -440,7 +483,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @param blockNumber Block number to revert to
      */
     function _revertToBlock(uint256 blockNumber) internal {
-        require(blockNumber < currentBlockNumber, "Cannot revert to future block");
+        if (blockNumber >= currentBlockNumber) revert InvalidBlockNumber();
         
         currentBlockNumber = blockNumber;
         currentStateRoot = blockHeaders[blockNumber].stateRoot;
@@ -479,22 +522,110 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     function setBlockTime(uint256 _blockTime) external onlyRole(DEFAULT_ADMIN_ROLE) {
         blockTime = _blockTime;
     }
-    
+
     function setValidationThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_threshold > 50 && _threshold <= 100, "Invalid threshold");
+        if (_threshold <= 50 || _threshold > 100) revert InvalidValidatorSet();
         validationThreshold = _threshold;
     }
-    
+
     function setChallengePeriod(uint256 _period) external onlyRole(DEFAULT_ADMIN_ROLE) {
         challengePeriod = _period;
     }
-    
+
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _pause();
     }
-    
+
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
+    }
+
+    /**
+     * @dev Grant oracle role to an address
+     * @param oracle Address to grant oracle role
+     */
+    function grantOracleRole(address oracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (oracle == address(0)) revert UnauthorizedAccess();
+        _grantRole(ORACLE_ROLE, oracle);
+    }
+
+    /**
+     * @dev Revoke oracle role from an address
+     * @param oracle Address to revoke oracle role
+     */
+    function revokeOracleRole(address oracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _revokeRole(ORACLE_ROLE, oracle);
+    }
+
+    /**
+     * @dev Grant validator role to an address
+     * @param validator Address to grant validator role
+     */
+    function grantValidatorRole(address validator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (validator == address(0)) revert UnauthorizedAccess();
+        _grantRole(VALIDATOR_ROLE, validator);
+    }
+
+    /**
+     * @dev Revoke validator role from an address
+     * @param validator Address to revoke validator role
+     */
+    function revokeValidatorRole(address validator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _revokeRole(VALIDATOR_ROLE, validator);
+    }
+
+    /**
+     * @dev Grant sequencer role to an address
+     * @param sequencer Address to grant sequencer role
+     */
+    function grantSequencerRole(address sequencer) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (sequencer == address(0)) revert UnauthorizedAccess();
+        _grantRole(SEQUENCER_ROLE, sequencer);
+    }
+
+    /**
+     * @dev Revoke sequencer role from an address
+     * @param sequencer Address to revoke sequencer role
+     */
+    function revokeSequencerRole(address sequencer) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _revokeRole(SEQUENCER_ROLE, sequencer);
+    }
+
+    /**
+     * @dev Batch setup roles for initial configuration
+     * @param oracles Array of oracle addresses
+     * @param validators Array of validator addresses
+     * @param sequencers Array of sequencer addresses
+     */
+    function batchSetupRoles(
+        address[] calldata oracles,
+        address[] calldata validators,
+        address[] calldata sequencers
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (oracles.length > 20) revert InvalidValidatorSet();
+        if (validators.length > 50) revert InvalidValidatorSet();
+        if (sequencers.length > 10) revert InvalidValidatorSet();
+        
+        // Grant oracle roles
+        for (uint256 i = 0; i < oracles.length; i++) {
+            if (oracles[i] != address(0)) {
+                _grantRole(ORACLE_ROLE, oracles[i]);
+            }
+        }
+        
+        // Grant validator roles
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validators[i] != address(0)) {
+                _grantRole(VALIDATOR_ROLE, validators[i]);
+            }
+        }
+        
+        // Grant sequencer roles
+        for (uint256 i = 0; i < sequencers.length; i++) {
+            if (sequencers[i] != address(0)) {
+                _grantRole(SEQUENCER_ROLE, sequencers[i]);
+            }
+        }
     }
 
     // Individual getter functions for complex structs

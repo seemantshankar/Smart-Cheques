@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+
+/**
+ * @title GovernanceToken
+ * @dev ERC20 token with voting capabilities for Smart Cheques governance
+ * @notice This token is used for governance voting and staking in the Smart Cheques ecosystem
+ */
+contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, AccessControl, Pausable {
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @dev Total supply of tokens (1 billion)
+    uint256 public constant TOTAL_SUPPLY = 1_000_000_000 ether;
+    
+    /// @dev Maximum supply that can ever exist
+    uint256 public constant MAX_SUPPLY = 2_000_000_000 ether;
+    
+    /// @dev Minimum time between mints (1 year)
+    uint256 public constant MIN_MINT_INTERVAL = 365 days;
+    
+    /// @dev Maximum mint amount per year (2% of total supply)
+    uint256 public constant MAX_MINT_PER_YEAR = 20_000_000 ether;
+
+    /// @dev Last mint timestamp
+    uint256 public lastMintTime;
+    
+    /// @dev Amount minted in current year
+    uint256 public mintedThisYear;
+    
+    /// @dev Start of current mint year
+    uint256 public currentMintYearStart;
+
+    // Events
+    event TokensMinted(address indexed to, uint256 amount, string reason);
+    event TokensBurned(address indexed from, uint256 amount, string reason);
+    event MintingParametersUpdated(uint256 maxMintPerYear, uint256 minMintInterval);
+
+    /**
+     * @dev Constructor that mints initial supply to deployer
+     * @param initialOwner Address to receive admin roles and initial tokens
+     */
+    constructor(address initialOwner) 
+        ERC20("Smart Cheque Governance", "SCG") 
+        ERC20Permit("Smart Cheque Governance") 
+    {
+        require(initialOwner != address(0), "Invalid initial owner");
+        
+        _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
+        _grantRole(ADMIN_ROLE, initialOwner);
+        _grantRole(MINTER_ROLE, initialOwner);
+        _grantRole(PAUSER_ROLE, initialOwner);
+        
+        // Mint initial supply
+        _mint(initialOwner, TOTAL_SUPPLY);
+        
+        // Initialize minting parameters
+        lastMintTime = block.timestamp;
+        currentMintYearStart = block.timestamp;
+        mintedThisYear = 0;
+        
+        emit TokensMinted(initialOwner, TOTAL_SUPPLY, "Initial supply");
+    }
+
+    /**
+     * @dev Mint new tokens (restricted to MINTER_ROLE)
+     * @param to Address to receive minted tokens
+     * @param amount Amount of tokens to mint
+     * @param reason Reason for minting
+     */
+    function mint(
+        address to, 
+        uint256 amount, 
+        string calldata reason
+    ) external onlyRole(MINTER_ROLE) whenNotPaused {
+        require(to != address(0), "Cannot mint to zero address");
+        require(amount > 0, "Amount must be greater than 0");
+        require(bytes(reason).length > 0, "Reason required");
+        
+        // Check if we need to reset the yearly counter
+        if (block.timestamp >= currentMintYearStart + 365 days) {
+            currentMintYearStart = block.timestamp;
+            mintedThisYear = 0;
+        }
+        
+        // Check minting constraints
+        require(
+            block.timestamp >= lastMintTime + MIN_MINT_INTERVAL || 
+            mintedThisYear + amount <= MAX_MINT_PER_YEAR,
+            "Minting limits exceeded"
+        );
+        
+        require(totalSupply() + amount <= MAX_SUPPLY, "Would exceed max supply");
+        
+        _mint(to, amount);
+        lastMintTime = block.timestamp;
+        mintedThisYear += amount;
+        
+        emit TokensMinted(to, amount, reason);
+    }
+
+    /**
+     * @dev Burn tokens from caller's balance
+     * @param amount Amount of tokens to burn
+     * @param reason Reason for burning
+     */
+    function burn(uint256 amount, string calldata reason) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+        require(bytes(reason).length > 0, "Reason required");
+        
+        _burn(msg.sender, amount);
+        
+        emit TokensBurned(msg.sender, amount, reason);
+    }
+
+    /**
+     * @dev Burn tokens from specified account (requires allowance)
+     * @param from Address to burn tokens from
+     * @param amount Amount of tokens to burn
+     * @param reason Reason for burning
+     */
+    function burnFrom(
+        address from, 
+        uint256 amount, 
+        string calldata reason
+    ) external {
+        require(from != address(0), "Cannot burn from zero address");
+        require(amount > 0, "Amount must be greater than 0");
+        require(bytes(reason).length > 0, "Reason required");
+        
+        uint256 currentAllowance = allowance(from, msg.sender);
+        require(currentAllowance >= amount, "Insufficient allowance");
+        
+        _spendAllowance(from, msg.sender, amount);
+        _burn(from, amount);
+        
+        emit TokensBurned(from, amount, reason);
+    }
+
+    /**
+     * @dev Delegate voting power to another address
+     * @param delegatee Address to delegate votes to
+     */
+    function delegate(address delegatee) public override whenNotPaused {
+        super.delegate(delegatee);
+    }
+
+    /**
+     * @dev Delegate voting power using signature
+     * @param delegatee Address to delegate votes to
+     * @param nonce Nonce for replay protection
+     * @param expiry Expiration timestamp
+     * @param v Signature parameter
+     * @param r Signature parameter
+     * @param s Signature parameter
+     */
+    function delegateBySig(
+        address delegatee,
+        uint256 nonce,
+        uint256 expiry,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public override whenNotPaused {
+        super.delegateBySig(delegatee, nonce, expiry, v, r, s);
+    }
+
+    /**
+     * @dev Get current voting power of an account
+     * @param account Address to check
+     * @return Current voting power
+     */
+    function getVotes(address account) public view override returns (uint256) {
+        return super.getVotes(account);
+    }
+
+    /**
+     * @dev Get past voting power of an account at specific block
+     * @param account Address to check
+     * @param blockNumber Block number to check
+     * @return Past voting power
+     */
+    function getPastVotes(
+        address account, 
+        uint256 blockNumber
+    ) public view override returns (uint256) {
+        return super.getPastVotes(account, blockNumber);
+    }
+
+    /**
+     * @dev Get total voting power at current block
+     * @return Total voting power
+     */
+    function getTotalVotes() public view returns (uint256) {
+        return getPastTotalSupply(block.number - 1);
+    }
+
+    /**
+     * @dev Get past total voting power at specific block
+     * @param blockNumber Block number to check
+     * @return Past total voting power
+     */
+    function getPastTotalSupply(
+        uint256 blockNumber
+    ) public view override returns (uint256) {
+        return super.getPastTotalSupply(blockNumber);
+    }
+
+    /**
+     * @dev Check if an account has minimum voting power for proposals
+     * @param account Address to check
+     * @param threshold Minimum threshold required
+     * @return True if account meets threshold
+     */
+    function hasVotingPower(
+        address account, 
+        uint256 threshold
+    ) external view returns (bool) {
+        return getVotes(account) >= threshold;
+    }
+
+    /**
+     * @dev Get remaining mintable amount for current year
+     * @return Remaining mintable amount
+     */
+    function getRemainingMintableAmount() external view returns (uint256) {
+        // Check if we're in a new mint year
+        if (block.timestamp >= currentMintYearStart + 365 days) {
+            return MAX_MINT_PER_YEAR;
+        }
+        
+        if (mintedThisYear >= MAX_MINT_PER_YEAR) {
+            return 0;
+        }
+        
+        return MAX_MINT_PER_YEAR - mintedThisYear;
+    }
+
+    /**
+     * @dev Check if minting is currently allowed
+     * @param amount Amount to mint
+     * @return True if minting is allowed
+     */
+    function canMint(uint256 amount) external view returns (bool) {
+        // Check max supply
+        if (totalSupply() + amount > MAX_SUPPLY) {
+            return false;
+        }
+        
+        // Check if enough time has passed for unrestricted minting
+        if (block.timestamp >= lastMintTime + MIN_MINT_INTERVAL) {
+            return true;
+        }
+        
+        // Check yearly limit
+        uint256 remainingMintable;
+        if (block.timestamp >= currentMintYearStart + 365 days) {
+            remainingMintable = MAX_MINT_PER_YEAR;
+        } else if (mintedThisYear >= MAX_MINT_PER_YEAR) {
+            remainingMintable = 0;
+        } else {
+            remainingMintable = MAX_MINT_PER_YEAR - mintedThisYear;
+        }
+        
+        return amount <= remainingMintable;
+    }
+
+    /**
+     * @dev Pause token transfers (admin only)
+     */
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /**
+     * @dev Unpause token transfers (admin only)
+     */
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
+    }
+
+    /**
+     * @dev Override transfer to add pause functionality
+     */
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal override whenNotPaused {
+        super._beforeTokenTransfer(from, to, amount);
+    }
+
+    /**
+     * @dev Override required by Solidity for multiple inheritance
+     */
+    function _afterTokenTransfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal override(ERC20, ERC20Votes) {
+        super._afterTokenTransfer(from, to, amount);
+    }
+
+    /**
+     * @dev Override required by Solidity for multiple inheritance
+     */
+    function _mint(
+        address to,
+        uint256 amount
+    ) internal override(ERC20, ERC20Votes) {
+        super._mint(to, amount);
+    }
+
+    /**
+     * @dev Override required by Solidity for multiple inheritance
+     */
+    function _burn(
+        address account,
+        uint256 amount
+    ) internal override(ERC20, ERC20Votes) {
+        super._burn(account, amount);
+    }
+
+    /**
+     * @dev Emergency function to recover accidentally sent tokens
+     * @param token Address of token to recover
+     * @param amount Amount to recover
+     */
+    function recoverToken(
+        address token,
+        uint256 amount
+    ) external onlyRole(ADMIN_ROLE) {
+        require(token != address(this), "Cannot recover governance token");
+        require(token != address(0), "Invalid token address");
+        
+        IERC20(token).transfer(msg.sender, amount);
+    }
+
+    /**
+     * @dev Emergency function to recover ETH
+     */
+    function recoverETH() external onlyRole(ADMIN_ROLE) {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No ETH to recover");
+        
+        (bool success, ) = msg.sender.call{value: balance}("");
+        require(success, "ETH recovery failed");
+    }
+
+    /**
+     * @dev Get token information
+     * @return tokenName Token name
+     * @return tokenSymbol Token symbol
+     * @return tokenDecimals Token decimals
+     * @return currentTotalSupply Total token supply
+     * @return maximumSupply Maximum possible supply
+     */
+    function getTokenInfo() external view returns (
+        string memory tokenName,
+        string memory tokenSymbol,
+        uint8 tokenDecimals,
+        uint256 currentTotalSupply,
+        uint256 maximumSupply
+    ) {
+        return (
+            name(),
+            symbol(),
+            decimals(),
+            totalSupply(),
+            MAX_SUPPLY
+        );
+    }
+}

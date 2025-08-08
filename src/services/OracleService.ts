@@ -9,15 +9,14 @@ interface OracleConfig {
 }
 
 export class OracleService {
-  private provider: ethers.providers.JsonRpcProvider;
+  private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private obligationRegistry: ethers.Contract;
   private oracles: Map<string, OracleConfig>;
 
   constructor(rpcUrl: string, privateKey: string) {
-    this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+    this.provider = new ethers.JsonRpcProvider(rpcUrl);
     this.wallet = new ethers.Wallet(privateKey, this.provider);
-    
     this.obligationRegistry = new ethers.Contract(
       process.env.OBLIGATION_REGISTRY_ADDRESS!,
       [

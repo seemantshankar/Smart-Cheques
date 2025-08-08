@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import winston from 'winston';
-import { ethers } from 'ethers';
+import { ethers, JsonRpcProvider, ZeroAddress, id } from 'ethers';
 import dotenv from 'dotenv';
 import { body, query, validationResult } from 'express-validator';
 import { db } from './db';
@@ -29,7 +29,7 @@ app.use(morgan('combined'));
 app.use(express.json());
 
 // Initialize provider and contracts
-const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
+const provider = new JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
 
 // Load contract ABIs
@@ -116,7 +116,7 @@ app.get('/api/cheques', [query('address').isEthereumAddress()], handleValidation
 
         return {
           id: row.cheque_id, // expose on-chain cheque id to the client
-          address: row.contract_address,
+          address: chequeContract.target,
           buyer: row.buyer_address,
           seller: row.seller_address,
           totalAmount,
@@ -167,7 +167,7 @@ app.get('/api/cheques/:chequeId', async (req, res) => {
     const chequeId = req.params.chequeId;
     const chequeAddress = await factoryContract.getChequeAddress(chequeId);
     
-    if (chequeAddress === ethers.constants.AddressZero) {
+    if (chequeAddress === ZeroAddress) {
       return res.status(404).json({
         success: false,
         error: 'Cheque not found'
@@ -210,7 +210,7 @@ app.get('/api/cheques/:chequeId', async (req, res) => {
             // Determine verification status from oracle data by obligation hash (computed from text)
             let verification: 'pending' | 'verified' = 'pending';
             try {
-              const obligationHash = ethers.utils.id(m.obligation);
+              const obligationHash = id(m.obligation);
               const oracleData = await db.getOracleDataByHash(obligationHash);
               if (oracleData && oracleData.length > 0) {
                 verification = 'verified';
@@ -395,7 +395,7 @@ app.get('/api/disputes', [query('address').isEthereumAddress()], handleValidatio
       status: String(row.status),
       reason: row.reason,
       evidence: row.evidence,
-      arbitrator: row.arbitrator_address || ethers.constants.AddressZero
+      arbitrator: row.arbitrator_address || ZeroAddress
     }));
 
     res.status(200).json({ success: true, total, page, pageSize, disputes });
@@ -517,8 +517,8 @@ function maybeCreateRelayerService(): RelayerService | null {
     for (const key of required) {
       if (!process.env[key]) return null;
     }
-    const l1Provider = new ethers.providers.JsonRpcProvider(process.env.L1_RPC_URL!);
-    const l2Provider = new ethers.providers.JsonRpcProvider(process.env.L2_RPC_URL!);
+    const l1Provider = new JsonRpcProvider(process.env.L1_RPC_URL!);
+    const l2Provider = new JsonRpcProvider(process.env.L2_RPC_URL!);
     return new RelayerService({
       l1Provider,
       l2Provider,

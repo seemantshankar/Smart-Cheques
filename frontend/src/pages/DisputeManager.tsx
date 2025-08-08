@@ -132,7 +132,7 @@ const DisputeManager = () => {
         ],
         provider.getSigner()
       );
-      const tx = await contract.escalateDisputeToPanel(disputeId, ethers.constants.HashZero);
+      const tx = await contract.escalateDisputeToPanel(disputeId, ethers.ZeroHash);
       await tx.wait();
       toast({ title: 'Escalated', description: 'Dispute escalated to panel', status: 'success' });
       fetchDisputes();
@@ -160,7 +160,7 @@ const DisputeManager = () => {
       const proposeTx = await disputeManagerContract.proposeResolution(
         selectedDispute.id,
         parseInt(resolution.type),
-        ethers.utils.parseEther(resolution.amount)
+        ethers.parseEther(resolution.amount)
       );
 
       await proposeTx.wait();

@@ -2,6 +2,7 @@
 import { ethers } from "hardhat";
 import { expect } from "chai";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+import { defaultAbiCoder, keccak256, hashMessage, arrayify } from "ethers";
 
 /**
  * Helper functions for authorization and escrow testing
@@ -17,19 +18,19 @@ export class AuthorizationTestHelper {
     signer: SignerWithAddress
   ) {
     // Create the authorization data
-    const authData = ethers.utils.defaultAbiCoder.encode(
+    const authData = defaultAbiCoder.encode(
       ["uint256", "uint256", "uint256", "address", "uint256"],
       [escrowId, milestoneIndex, amount, recipient, deadline]
     );
     
     // Create message hash
-    const messageHash = ethers.utils.keccak256(authData);
-    const ethSignedMessageHash = ethers.utils.hashMessage(
-      ethers.utils.arrayify(messageHash)
+    const messageHash = keccak256(authData);
+    const ethSignedMessageHash = hashMessage(
+      arrayify(messageHash)
     );
     
     // Sign the message
-    const signature = await signer.signMessage(ethers.utils.arrayify(messageHash));
+    const signature = await signer.signMessage(arrayify(messageHash));
     
     return {
       authData,
@@ -94,12 +95,12 @@ export class AuthorizationTestHelper {
     milestoneAmounts: any[]
   ) {
     // Approve tokens
-    await token.connect(buyer).approve(escrowFactory.address, totalAmount);
+    await token.connect(buyer).approve(validatorManager.target, totalAmount);
     
     // Create escrow
     const tx = await escrowFactory.connect(buyer).createEscrow(
       seller.address,
-      token.address,
+      token.target,
       totalAmount,
       milestoneAmounts,
       "Test escrow"

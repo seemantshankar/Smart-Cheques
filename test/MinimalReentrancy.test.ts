@@ -7,10 +7,9 @@ describe("Minimal Reentrancy Test", function () {
     });
 
     it("should deploy a contract", async function () {
-        const [owner] = await ethers.getSigners();
         const MockERC20 = await ethers.getContractFactory("MockERC20");
-        const token = await MockERC20.deploy("Test", "TEST", ethers.utils.parseEther("1000"));
-        await token.deployed();
-        expect(token.address).to.not.be.undefined;
+        const token = await MockERC20.deploy("Test", "TEST", ethers.parseEther("1000"));
+        await token.waitForDeployment();
+        expect(token.target).to.not.be.undefined;
     });
 });

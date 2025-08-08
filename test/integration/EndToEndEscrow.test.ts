@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: MIT
+// Integration Test: End-to-End Escrow Flow
+
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+
+describe("Integration: End-to-End Escrow Flow", function () {
+    let owner: SignerWithAddress;
+    let buyer: SignerWithAddress;
+    let seller: SignerWithAddress;
+
+    before(async function () {
+        [owner, buyer, seller, arbitrator] = await ethers.getSigners();
+    });
+
+    async function deployContracts() {
+        // Deploy mock token
+        const MockToken = await ethers.getContractFactory("MockERC20");
+        const token = await MockToken.deploy("Test Token", "TEST", ethers.utils.parseEther("1000000"));
+        await token.mint(buyer.address, ethers.utils.parseEther("1000"));
+        
+        // Deploy SimpleEscrow contract
+        const SimpleEscrow = await ethers.getContractFactory("SimpleEscrow");
+        
+        const totalAmount = ethers.utils.parseEther("1.0");
+        const milestoneAmounts = [ethers.utils.parseEther("0.5"), ethers.utils.parseEther("0.5")];
+        const obligations = [
+            ethers.utils.keccak256(ethers.utils.toUtf8Bytes("Milestone 1: Design")),
+            ethers.utils.keccak256(ethers.utils.toUtf8Bytes("Milestone 2: Development"))
+        ];
+        
+        const escrow = await SimpleEscrow.deploy(
+            buyer.address,
+            seller.address,
+            totalAmount,
+            milestoneAmounts,
+            obligations,
+            owner.address,
+            86400 // 1 day timelock
+        );
+        
+        return { token, escrow };
+    }
+
+    describe("Complete Escrow Lifecycle", function () {
+        it("Should complete full escrow flow: fund -> milestone -> finalize", async function () {
+            const { token, escrow } = await deployContracts();
+            const totalAmount = ethers.utils.parseEther("1.0");
+            
+            // Step 1: Buyer funds the escrow
+            await token.connect(buyer).approve(escrow.address, totalAmount);
+            await escrow.connect(buyer).lockFunds(token.address, totalAmount);
+            
+            // Verify funds are locked
+            expect(await escrow.isLocked()).to.be.true;
+            expect(await token.balanceOf(escrow.address)).to.equal(totalAmount);
+            
+            // Step 2: Complete first milestone
+            const proof1 = ethers.utils.defaultAbiCoder.encode(["string"], ["Design completed"]);
+            await escrow.connect(seller).completeMilestone(0, proof1);
+            
+            // Verify milestone is ready for finalization (completion time is set)
+            const completionTime1 = await escrow.milestoneCompletionTime(0);
+            expect(completionTime1).to.be.gt(0);
+            
+            // Step 3: Complete second milestone
+            const proof2 = ethers.utils.defaultAbiCoder.encode(["string"], ["Development completed"]);
+            await escrow.connect(seller).completeMilestone(1, proof2);
+            
+            // Verify second milestone is ready for finalization
+            const completionTime2 = await escrow.milestoneCompletionTime(1);
+            expect(completionTime2).to.be.gt(0);
+            
+            // Step 4: Finalize milestones (after timelock)
+            // Fast forward time to bypass timelock
+            await ethers.provider.send("evm_increaseTime", [86400]); // 1 day
+            await ethers.provider.send("evm_mine", []);
+            
+            const sellerBalanceBefore = await token.balanceOf(seller.address);
+            
+            await escrow.finalizeMilestone(0);
+            await escrow.finalizeMilestone(1);
+            
+            // Verify milestones are completed after finalization
+            const milestone1Final = await escrow.getMilestone(0);
+            const milestone2Final = await escrow.getMilestone(1);
+            expect(milestone1Final.isCompleted).to.be.true;
+            expect(milestone2Final.isCompleted).to.be.true;
+            
+            // Verify funds transferred to seller
+            const sellerBalanceAfter = await token.balanceOf(seller.address);
+            expect(sellerBalanceAfter.sub(sellerBalanceBefore)).to.equal(totalAmount);
+            
+            // Verify escrow is finalized
+            expect(await escrow.isFinalized()).to.be.true;
+        });
+
+        it("Should handle dispute resolution flow", async function () {
+            const { token, escrow } = await deployContracts();
+            const totalAmount = ethers.utils.parseEther("1.0");
+            
+            // Fund escrow
+            await token.connect(buyer).approve(escrow.address, totalAmount);
+            await escrow.connect(buyer).lockFunds(token.address, totalAmount);
+            
+            // Complete first milestone
+            const proof = ethers.utils.defaultAbiCoder.encode(["string"], ["Work completed"]);
+            await escrow.connect(seller).completeMilestone(0, proof);
+            
+            // Raise dispute
+            await escrow.connect(buyer).raiseDispute(0);
+            
+            // Verify dispute is raised
+            const milestone = await escrow.getMilestone(0);
+            expect(milestone.isDisputed).to.be.true;
+            
+            // Resolve dispute (admin resolves in favor of buyer - refund)
+            await escrow.connect(owner).resolveDispute(0, false); // false = refund to buyer
+            
+            // Verify dispute resolution
+            const resolvedMilestone = await escrow.getMilestone(0);
+            expect(resolvedMilestone.isDisputed).to.be.false;
+        });
+
+        it("Should handle emergency pause and recovery", async function () {
+            const { token, escrow } = await deployContracts();
+            const totalAmount = ethers.utils.parseEther("1.0");
+            
+            // Fund escrow
+            await token.connect(buyer).approve(escrow.address, totalAmount);
+            await escrow.connect(buyer).lockFunds(token.address, totalAmount);
+            
+            // Emergency pause
+            await escrow.connect(owner).pause();
+            
+            // Verify contract is paused
+            expect(await escrow.paused()).to.be.true;
+            
+            // Try to complete milestone while paused (should fail)
+            const proof = ethers.utils.defaultAbiCoder.encode(["string"], ["Work done"]);
+            await expect(
+                escrow.connect(seller).completeMilestone(0, proof)
+            ).to.be.revertedWith("Pausable: paused");
+            
+            // Unpause
+            await escrow.connect(owner).unpause();
+            
+            // Verify contract is unpaused
+            expect(await escrow.paused()).to.be.false;
+            
+            // Now milestone completion should work
+            await escrow.connect(seller).completeMilestone(0, proof);
+            const completionTime = await escrow.milestoneCompletionTime(0);
+            expect(completionTime).to.be.gt(0);
+        });
+    });
+});

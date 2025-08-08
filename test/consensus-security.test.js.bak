@@ -1,0 +1,636 @@
+const { expect } = require("chai");
+const { ethers, upgrades } = require("hardhat");
+const { parseEther, formatEther } = ethers.utils;
+const { time } = require("@nomicfoundation/hardhat-network-helpers");
+
+describe("Consensus and Security Implementation", function () {
+    let deployer, sequencer1, sequencer2, challenger, user1, user2;
+    let governanceToken, governanceDAO, timelock;
+    let stateRootManager, sequencerManager, slashingManager, fraudProofManager;
+    
+    const config = {
+        challengePeriod: 7 * 24 * 60 * 60, // 7 days
+        challengeBond: parseEther("1000"),
+        finalizationDelay: 24 * 60 * 60, // 24 hours
+        minStake: parseEther("10000"),
+        blockTimeout: 300,
+        rotationPeriod: 24 * 60 * 60,
+        downtimeSlashingPercentage: 100,
+        doubleSignSlashingPercentage: 500,
+        votingDelay: 1 * 24 * 60 * 60,
+        votingPeriod: 7 * 24 * 60 * 60,
+        proposalThreshold: parseEther("1000"),
+        quorumFraction: 10,
+        timelockDelay: 2 * 24 * 60 * 60,
+        initialSupply: parseEther("1000000"),
+        maxSupply: parseEther("100000000"),
+        maxMintPerYear: parseEther("10000000"),
+        fraudProofBond: parseEther("500"),
+        verificationPeriod: 3 * 24 * 60 * 60
+    };
+
+    beforeEach(async function () {
+        [deployer, sequencer1, sequencer2, challenger, user1, user2] = await ethers.getSigners();
+
+        // Deploy Governance Token
+        const GovernanceToken = await ethers.getContractFactory("GovernanceToken");
+        governanceToken = await upgrades.deployProxy(
+            GovernanceToken,
+            [
+                "Smart Cheques Governance Token",
+                "SCGT",
+                config.initialSupply,
+                config.maxSupply,
+                config.maxMintPerYear,
+                deployer.address
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Deploy Timelock Controller
+        const TimelockController = await ethers.getContractFactory("TimelockController");
+        timelock = await TimelockController.deploy(
+            config.timelockDelay,
+            [deployer.address],
+            [deployer.address],
+            deployer.address
+        );
+
+        // Deploy Governance DAO
+        const GovernanceDAO = await ethers.getContractFactory("GovernanceDAO");
+        governanceDAO = await upgrades.deployProxy(
+            GovernanceDAO,
+            [
+                governanceToken.address,
+                timelock.address,
+                config.votingDelay,
+                config.votingPeriod,
+                config.proposalThreshold,
+                config.quorumFraction
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Deploy State Root Manager
+        const StateRootManager = await ethers.getContractFactory("StateRootManager");
+        stateRootManager = await upgrades.deployProxy(
+            StateRootManager,
+            [
+                governanceToken.address,
+                config.challengePeriod,
+                config.challengeBond,
+                config.finalizationDelay
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Deploy Sequencer Manager
+        const SequencerManager = await ethers.getContractFactory("SequencerManager");
+        sequencerManager = await upgrades.deployProxy(
+            SequencerManager,
+            [
+                governanceToken.address,
+                config.minStake,
+                config.blockTimeout,
+                config.rotationPeriod,
+                config.downtimeSlashingPercentage,
+                config.doubleSignSlashingPercentage
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Deploy Slashing Manager
+        const SlashingManager = await ethers.getContractFactory("SlashingManager");
+        slashingManager = await upgrades.deployProxy(
+            SlashingManager,
+            [
+                governanceToken.address,
+                sequencerManager.address,
+                deployer.address
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Deploy Fraud Proof Manager
+        const FraudProofManager = await ethers.getContractFactory("FraudProofManager");
+        fraudProofManager = await upgrades.deployProxy(
+            FraudProofManager,
+            [
+                governanceToken.address,
+                stateRootManager.address,
+                slashingManager.address,
+                config.fraudProofBond,
+                config.challengePeriod,
+                config.verificationPeriod
+            ],
+            { initializer: "initialize" }
+        );
+
+        // Setup roles and permissions
+        const SEQUENCER_ROLE = await stateRootManager.SEQUENCER_ROLE();
+        const CHALLENGER_ROLE = await stateRootManager.CHALLENGER_ROLE();
+        const SLASHER_ROLE = await slashingManager.SLASHER_ROLE();
+        const EVIDENCE_SUBMITTER_ROLE = await slashingManager.EVIDENCE_SUBMITTER_ROLE();
+        const CHALLENGER_ROLE_FRAUD = await fraudProofManager.CHALLENGER_ROLE();
+        const VERIFIER_ROLE = await fraudProofManager.VERIFIER_ROLE();
+        const MINTER_ROLE = await governanceToken.MINTER_ROLE();
+
+        await stateRootManager.grantRole(SEQUENCER_ROLE, sequencerManager.address);
+        await stateRootManager.grantRole(CHALLENGER_ROLE, fraudProofManager.address);
+        await slashingManager.grantRole(SLASHER_ROLE, sequencerManager.address);
+        await slashingManager.grantRole(SLASHER_ROLE, fraudProofManager.address);
+        await slashingManager.grantRole(EVIDENCE_SUBMITTER_ROLE, fraudProofManager.address);
+        await fraudProofManager.grantRole(CHALLENGER_ROLE_FRAUD, challenger.address);
+        await fraudProofManager.grantRole(VERIFIER_ROLE, deployer.address);
+        await governanceToken.grantRole(MINTER_ROLE, deployer.address);
+
+        // Distribute tokens for testing
+        await governanceToken.mint(sequencer1.address, parseEther("50000"));
+        await governanceToken.mint(sequencer2.address, parseEther("50000"));
+        await governanceToken.mint(challenger.address, parseEther("10000"));
+        await governanceToken.mint(user1.address, parseEther("5000"));
+        await governanceToken.mint(user2.address, parseEther("5000"));
+
+        // Delegate voting power
+        await governanceToken.connect(deployer).delegate(deployer.address);
+        await governanceToken.connect(sequencer1).delegate(sequencer1.address);
+        await governanceToken.connect(sequencer2).delegate(sequencer2.address);
+        await governanceToken.connect(challenger).delegate(challenger.address);
+        await governanceToken.connect(user1).delegate(user1.address);
+        await governanceToken.connect(user2).delegate(user2.address);
+    });
+
+    describe("Governance Token", function () {
+        it("Should have correct initial configuration", async function () {
+            expect(await governanceToken.name()).to.equal("Smart Cheques Governance Token");
+            expect(await governanceToken.symbol()).to.equal("SCGT");
+            expect(await governanceToken.totalSupply()).to.equal(config.initialSupply);
+            expect(await governanceToken.MAX_SUPPLY()).to.equal(config.maxSupply);
+        });
+
+        it("Should allow minting within limits", async function () {
+            const mintAmount = parseEther("1000");
+            const initialSupply = await governanceToken.totalSupply();
+            
+            await governanceToken.mint(user1.address, mintAmount);
+            
+            expect(await governanceToken.totalSupply()).to.equal(initialSupply.add(mintAmount));
+            expect(await governanceToken.balanceOf(user1.address)).to.equal(parseEther("6000"));
+        });
+
+        it("Should enforce yearly minting limits", async function () {
+            const maxMintAmount = config.maxMintPerYear.add(1);
+            
+            await expect(
+                governanceToken.mint(user1.address, maxMintAmount)
+            ).to.be.revertedWith("Exceeds yearly mint limit");
+        });
+
+        it("Should support voting delegation", async function () {
+            const votes = await governanceToken.getVotes(user1.address);
+            expect(votes).to.equal(parseEther("5000"));
+        });
+    });
+
+    describe("Sequencer Manager", function () {
+        beforeEach(async function () {
+            // Approve tokens for staking
+            await governanceToken.connect(sequencer1).approve(sequencerManager.address, parseEther("20000"));
+            await governanceToken.connect(sequencer2).approve(sequencerManager.address, parseEther("20000"));
+        });
+
+        it("Should allow sequencer registration", async function () {
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+
+            const sequencerInfo = await sequencerManager.sequencers(sequencer1.address);
+            expect(sequencerInfo.isActive).to.be.true;
+            expect(sequencerInfo.stake).to.equal(parseEther("15000"));
+            expect(sequencerInfo.endpoint).to.equal("https://sequencer1.example.com");
+        });
+
+        it("Should enforce minimum stake requirement", async function () {
+            await expect(
+                sequencerManager.connect(sequencer1).registerSequencer(
+                    parseEther("5000"),
+                    "https://sequencer1.example.com",
+                    "Sequencer 1"
+                )
+            ).to.be.revertedWith("Insufficient stake");
+        });
+
+        it("Should allow stake increase", async function () {
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+
+            await sequencerManager.connect(sequencer1).increaseStake(parseEther("5000"));
+            
+            const sequencerInfo = await sequencerManager.sequencers(sequencer1.address);
+            expect(sequencerInfo.stake).to.equal(parseEther("20000"));
+        });
+
+        it("Should handle sequencer rotation", async function () {
+            // Register multiple sequencers
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+            await sequencerManager.connect(sequencer2).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer2.example.com",
+                "Sequencer 2"
+            );
+
+            const currentSequencer = await sequencerManager.getCurrentSequencer();
+            expect(currentSequencer).to.not.equal(ethers.constants.AddressZero);
+
+            // Fast forward time to trigger rotation
+            await time.increase(config.rotationPeriod + 1);
+            await sequencerManager.rotateSequencer();
+
+            const newSequencer = await sequencerManager.getCurrentSequencer();
+            expect(newSequencer).to.not.equal(currentSequencer);
+        });
+    });
+
+    describe("State Root Manager", function () {
+        beforeEach(async function () {
+            // Register a sequencer
+            await governanceToken.connect(sequencer1).approve(sequencerManager.address, parseEther("20000"));
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+        });
+
+        it("Should allow state root submission by sequencer", async function () {
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test_state_root"));
+            const blockNumber = 1;
+            
+            await stateRootManager.connect(sequencer1).submitStateRoot(
+                blockNumber,
+                stateRoot,
+                ethers.constants.HashZero
+            );
+
+            const submission = await stateRootManager.stateRoots(blockNumber);
+            expect(submission.stateRoot).to.equal(stateRoot);
+            expect(submission.sequencer).to.equal(sequencer1.address);
+        });
+
+        it("Should allow challenges to state roots", async function () {
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test_state_root"));
+            const blockNumber = 1;
+            
+            await stateRootManager.connect(sequencer1).submitStateRoot(
+                blockNumber,
+                stateRoot,
+                ethers.constants.HashZero
+            );
+
+            // Approve challenge bond
+            await governanceToken.connect(challenger).approve(stateRootManager.address, config.challengeBond);
+            
+            await stateRootManager.connect(challenger).challengeStateRoot(
+                blockNumber,
+                "Invalid state transition"
+            );
+
+            const challenge = await stateRootManager.challenges(blockNumber, 0);
+            expect(challenge.challenger).to.equal(challenger.address);
+            expect(challenge.isResolved).to.be.false;
+        });
+
+        it("Should finalize unchallenged state roots", async function () {
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test_state_root"));
+            const blockNumber = 1;
+            
+            await stateRootManager.connect(sequencer1).submitStateRoot(
+                blockNumber,
+                stateRoot,
+                ethers.constants.HashZero
+            );
+
+            // Fast forward past challenge period
+            await time.increase(config.challengePeriod + config.finalizationDelay + 1);
+            
+            await stateRootManager.finalizeStateRoot(blockNumber);
+
+            const submission = await stateRootManager.stateRoots(blockNumber);
+            expect(submission.isFinalized).to.be.true;
+        });
+    });
+
+    describe("Slashing Manager", function () {
+        beforeEach(async function () {
+            // Register a sequencer
+            await governanceToken.connect(sequencer1).approve(sequencerManager.address, parseEther("20000"));
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+        });
+
+        it("Should have correct default slashing configurations", async function () {
+            const doubleSignConfig = await slashingManager.slashingConfigs(0); // DOUBLE_SIGNING
+            expect(doubleSignConfig.penaltyPercentage).to.equal(500); // 5%
+            expect(doubleSignConfig.jailDuration).to.equal(7 * 24 * 60 * 60); // 7 days
+            expect(doubleSignConfig.requiresEvidence).to.be.true;
+        });
+
+        it("Should allow evidence submission", async function () {
+            const evidenceHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("evidence_data"));
+            const slashingType = 0; // DOUBLE_SIGNING
+            
+            const evidenceId = await slashingManager.submitEvidence(
+                sequencer1.address,
+                slashingType,
+                evidenceHash,
+                "QmTestIPFSHash"
+            );
+
+            // The function returns a transaction, we need to get the return value differently
+            // For now, we'll just check that the transaction succeeded
+            expect(evidenceId).to.not.be.undefined;
+        });
+
+        it("Should allow slashing with evidence", async function () {
+            const evidenceHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("evidence_data"));
+            const slashingType = 0; // DOUBLE_SIGNING
+            
+            // Submit evidence
+            await slashingManager.submitEvidence(
+                sequencer1.address,
+                slashingType,
+                evidenceHash,
+                "QmTestIPFSHash"
+            );
+
+            // Create evidence ID (this is how it's calculated in the contract)
+            const evidenceId = ethers.utils.keccak256(
+                ethers.utils.defaultAbiCoder.encode(
+                    ["address", "uint8", "bytes32", "uint256", "address"],
+                    [sequencer1.address, slashingType, evidenceHash, await time.latest(), deployer.address]
+                )
+            );
+
+            // Verify evidence
+            await slashingManager.verifyEvidence(evidenceId, true);
+
+            // Slash validator
+            await slashingManager.slashValidator(
+                sequencer1.address,
+                slashingType,
+                evidenceId,
+                0 // Use default amount
+            );
+
+            const slashingCount = await slashingManager.validatorSlashingCounts(sequencer1.address);
+            expect(slashingCount).to.equal(1);
+        });
+    });
+
+    describe("Fraud Proof Manager", function () {
+        beforeEach(async function () {
+            // Register a sequencer
+            await governanceToken.connect(sequencer1).approve(sequencerManager.address, parseEther("20000"));
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+
+            // Approve fraud proof bond
+            await governanceToken.connect(challenger).approve(fraudProofManager.address, config.fraudProofBond);
+        });
+
+        it("Should allow fraud proof submission", async function () {
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("invalid_state_root"));
+            const transactionHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("invalid_tx"));
+            const proofData = ethers.utils.toUtf8Bytes("proof_data");
+            
+            const challengeId = await fraudProofManager.connect(challenger).callStatic.submitChallenge(
+                sequencer1.address,
+                0, // INVALID_STATE_TRANSITION
+                1, // block number
+                stateRoot,
+                transactionHash,
+                proofData,
+                "Invalid state transition detected"
+            );
+
+            await fraudProofManager.connect(challenger).submitChallenge(
+                sequencer1.address,
+                0,
+                1,
+                stateRoot,
+                transactionHash,
+                proofData,
+                "Invalid state transition detected"
+            );
+
+            const fraudProof = await fraudProofManager.fraudProofs(challengeId);
+            expect(fraudProof.challenger).to.equal(challenger.address);
+            expect(fraudProof.accused).to.equal(sequencer1.address);
+            expect(fraudProof.status).to.equal(0); // PENDING
+        });
+
+        it("Should allow challenge verification", async function () {
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("invalid_state_root"));
+            const transactionHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("invalid_tx"));
+            const proofData = ethers.utils.toUtf8Bytes("proof_data");
+            
+            const challengeId = await fraudProofManager.connect(challenger).callStatic.submitChallenge(
+                sequencer1.address,
+                0,
+                1,
+                stateRoot,
+                transactionHash,
+                proofData,
+                "Invalid state transition detected"
+            );
+
+            await fraudProofManager.connect(challenger).submitChallenge(
+                sequencer1.address,
+                0,
+                1,
+                stateRoot,
+                transactionHash,
+                proofData,
+                "Invalid state transition detected"
+            );
+
+            await fraudProofManager.verifyChallenge(
+                challengeId,
+                true,
+                "Challenge verified as valid"
+            );
+
+            const fraudProof = await fraudProofManager.fraudProofs(challengeId);
+            expect(fraudProof.status).to.equal(1); // VERIFIED
+        });
+    });
+
+    describe("Governance DAO", function () {
+        it("Should allow proposal creation", async function () {
+            const targets = [governanceToken.address];
+            const values = [0];
+            const calldatas = [governanceToken.interface.encodeFunctionData("pause")];
+            const description = "Pause the governance token";
+            
+            const proposalId = await governanceDAO.callStatic.propose(
+                targets,
+                values,
+                calldatas,
+                description
+            );
+
+            await governanceDAO.propose(targets, values, calldatas, description);
+            
+            const proposalState = await governanceDAO.state(proposalId);
+            expect(proposalState).to.equal(0); // Pending
+        });
+
+        it("Should allow voting on proposals", async function () {
+            const targets = [governanceToken.address];
+            const values = [0];
+            const calldatas = [governanceToken.interface.encodeFunctionData("pause")];
+            const description = "Pause the governance token";
+            
+            const proposalId = await governanceDAO.callStatic.propose(
+                targets,
+                values,
+                calldatas,
+                description
+            );
+
+            await governanceDAO.propose(targets, values, calldatas, description);
+            
+            // Fast forward past voting delay
+            await time.increase(config.votingDelay + 1);
+            
+            // Vote on proposal
+            await governanceDAO.castVote(proposalId, 1); // Vote "For"
+            
+            const hasVoted = await governanceDAO.hasVoted(proposalId, deployer.address);
+            expect(hasVoted).to.be.true;
+        });
+    });
+
+    describe("Integration Tests", function () {
+        it("Should handle complete fraud proof workflow", async function () {
+            // 1. Register sequencer
+            await governanceToken.connect(sequencer1).approve(sequencerManager.address, parseEther("20000"));
+            await sequencerManager.connect(sequencer1).registerSequencer(
+                parseEther("15000"),
+                "https://sequencer1.example.com",
+                "Sequencer 1"
+            );
+
+            // 2. Submit state root
+            const stateRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test_state_root"));
+            await stateRootManager.connect(sequencer1).submitStateRoot(
+                1,
+                stateRoot,
+                ethers.constants.HashZero
+            );
+
+            // 3. Submit fraud proof
+            await governanceToken.connect(challenger).approve(fraudProofManager.address, config.fraudProofBond);
+            const proofData = ethers.utils.toUtf8Bytes("fraud_proof_data");
+            
+            const challengeId = await fraudProofManager.connect(challenger).callStatic.submitChallenge(
+                sequencer1.address,
+                0,
+                1,
+                stateRoot,
+                ethers.constants.HashZero,
+                proofData,
+                "Fraudulent state transition"
+            );
+
+            await fraudProofManager.connect(challenger).submitChallenge(
+                sequencer1.address,
+                0,
+                1,
+                stateRoot,
+                ethers.constants.HashZero,
+                proofData,
+                "Fraudulent state transition"
+            );
+
+            // 4. Verify and resolve challenge
+            await fraudProofManager.verifyChallenge(challengeId, true, "Valid fraud proof");
+            await fraudProofManager.resolveChallenge(challengeId, challenger.address);
+
+            // 5. Check results
+            const fraudProof = await fraudProofManager.fraudProofs(challengeId);
+            expect(fraudProof.status).to.equal(3); // RESOLVED
+            
+            const successfulChallenges = await fraudProofManager.successfulChallenges(challenger.address);
+            expect(successfulChallenges).to.equal(1);
+        });
+
+        it("Should handle governance proposal for parameter updates", async function () {
+            // Create proposal to update challenge period
+            const newChallengePeriod = 14 * 24 * 60 * 60; // 14 days
+            const targets = [stateRootManager.address];
+            const values = [0];
+            const calldatas = [
+                stateRootManager.interface.encodeFunctionData(
+                    "updateChallengePeriod",
+                    [newChallengePeriod]
+                )
+            ];
+            const description = "Update challenge period to 14 days";
+            
+            const proposalId = await governanceDAO.callStatic.propose(
+                targets,
+                values,
+                calldatas,
+                description
+            );
+
+            await governanceDAO.propose(targets, values, calldatas, description);
+            
+            // Fast forward and vote
+            await time.increase(config.votingDelay + 1);
+            await governanceDAO.castVote(proposalId, 1);
+            
+            // Fast forward past voting period
+            await time.increase(config.votingPeriod + 1);
+            
+            // Queue proposal
+            await governanceDAO.queue(
+                targets,
+                values,
+                calldatas,
+                ethers.utils.keccak256(ethers.utils.toUtf8Bytes(description))
+            );
+            
+            // Fast forward past timelock delay
+            await time.increase(config.timelockDelay + 1);
+            
+            // Execute proposal
+            await governanceDAO.execute(
+                targets,
+                values,
+                calldatas,
+                ethers.utils.keccak256(ethers.utils.toUtf8Bytes(description))
+            );
+            
+            // Verify parameter was updated
+            const updatedChallengePeriod = await stateRootManager.challengePeriod();
+            expect(updatedChallengePeriod).to.equal(newChallengePeriod);
+        });
+    });
+});

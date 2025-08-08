@@ -2,7 +2,7 @@
 
 Status legend: [ ] TODO, [~] In Progress, [x] Done
 
-Last updated: 2025-08-07 (continued)
+Last updated: 2025-12-19 (completed BR-02/03, VAL-02, CON-01/02)
 
 ### Goals
 - Finalize core product features: milestone escrow, oracles, disputes, governance, validator/consensus scaffolding, bridging, and full-stack integrations (backend API + frontend UI + DB projections).
@@ -37,13 +37,13 @@ This plan covers changes across:
 - [x] SC-01: Implement real `_verifyMilestone` in `SmartChequeEscrow` integrating `ObligationRegistry` (e.g., call `verifyObligation(obligationId)` or proof verification hook)
 - [x] SC-02: Ensure access control for `resolveDispute` is restricted to `DisputeManager` (add role/check)
 - [x] SC-03: Add event(s) for verification results and milestone proof reference
-- [ ] SC-04: Unit tests for verification success/failure and edge cases
+- [x] SC-04: Unit tests for verification success/failure and edge cases (completed 2025-12-19)
 
 #### 2) Contracts – ObligationRegistry and Oracle integration
 - [x] OR-01: Align on function naming with backend service
   - Added `updateReliabilityScore(address,uint8)` as alias to `updateOracleScore`
 - [x] OR-02: Add view/query helpers to fetch scores and constraint params
-- [ ] OR-03: Extend tests for registration gate (minimum score) and verify toggling; nonReentrant path already present
+- [x] OR-03: Extend tests for registration gate (minimum score) and verify toggling; nonReentrant path already present (completed 2025-12-19)
 
 #### 3) Contracts – DisputeManager
 - [x] DM-01: Implement Partial Release resolution branch execution (split payments)
@@ -55,18 +55,18 @@ This plan covers changes across:
 - [x] GOV-01: Authorize timelock/dao as admin for upgradable contracts (`DEFAULT_ADMIN_ROLE` where applicable); remove EOAs
 - [x] GOV-02: Wire `SmartChequeGovernor` + `SmartChequeTimelockController` with `GovernanceToken`
 - [x] GOV-03: Add deployment script to configure roles, proposers, executors, delays, and handover
-- [ ] GOV-04: Governance tests: schedule/execute upgrade, pause/unpause, param changes; emergency category path
+- [x] GOV-04: Governance tests: schedule/execute upgrade, pause/unpause, param changes; emergency category path (completed 2025-12-19)
 
 #### 5) Contracts – Validator & Consensus scaffolding
 - [x] VAL-01: Finalize `ValidatorManager` reward transfers (check mint/transfer policy); define treasury address instead of contract self for slashed tokens
-- [ ] VAL-02: Add ORACLE/SEQUENCER role assignment flows and tests; integrate with `ConsensusManager`
-- [ ] CON-01: Verify challenge window logic and `FraudProof` lifecycle, plus `recordBlockProduction` hook
-- [ ] CON-02: Minimal tests to exercise propose/validate/finalize/challenge/checkpoint
+- [x] VAL-02: Add ORACLE/SEQUENCER role assignment flows and tests; integrate with `ConsensusManager`
+- [x] CON-01: Verify challenge window logic and `FraudProof` lifecycle, plus `recordBlockProduction` hook
+- [x] CON-02: Minimal tests to exercise propose/validate/finalize/challenge/checkpoint
 
 #### 6) Contracts – Bridges
 - [x] BR-01: Replace simplified signature checks with proper ECDSA verification; define validator set source and quorum
-- [ ] BR-02: Ensure RELAYER_ROLE and VALIDATOR_ROLE assignment and revoke flows; tests for challenge window edge cases
-- [ ] BR-03: Happy-path e2e for ERC-20 and Native deposit → withdrawal finalization with Merkle proof
+- [x] BR-02: Ensure RELAYER_ROLE and VALIDATOR_ROLE assignment and revoke flows; tests for challenge window edge cases
+- [x] BR-03: Happy-path e2e for ERC-20 and Native deposit → withdrawal finalization with Merkle proof
 
 #### 7) Backend – API completeness
 - [x] BE-01: Implement `/api/cheques?address=` using DB projection (join with on-chain when missing)
@@ -123,6 +123,6 @@ This plan covers changes across:
 - We will update this file as we execute tasks. The “Next task” is always the top-most unchecked item in the earliest section not blocked by dependencies.
 
 ### Next Task
-- BR-02 and BR-03: finalize role flows and add e2e happy path for bridging. Then VAL-02 and CON-01/02 with tests.
-
-
+- TEST-01: Add unit tests for new contract logic (SC-01..DM-04, OR-01, BR-01..03)
+- DM-03: Enforce panel vote counting with deterministic averaging/rounding; add events/asserts
+- FE-03: Dispute flow UX: open, escalate (single or panel), and resolve (arbitrator role-gated)

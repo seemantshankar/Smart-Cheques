@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import {SafeERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {ECDSAUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+
+// Minimal interface for registry
+interface IObligationRegistry {
+    function verifyObligation(bytes32 obligationId) external returns (bool);
+    function getObligation(bytes32 obligationId) external view returns (
+        bytes32 hash,
+        address oracleAddress,
+        bytes4 oracleFunction,
+        bytes memory parameters,
+        bool isVerified,
+        uint256 verificationTimestamp
+    );
+}
 
 /**
  * @title SmartChequeEscrow
@@ -21,6 +34,26 @@ contract SmartChequeEscrow is
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using ECDSAUpgradeable for bytes32;
+
+    // Custom errors
+    error InvalidMilestoneIndex();
+    error FundsNotLocked();
+    error OffChainSignedDisabled();
+    error SignerNotSet();
+    error AuthorizationExpired();
+    error MilestoneAlreadyCompleted();
+    error MilestoneDisputed();
+    error InvalidRecipient();
+    error InvalidSignature();
+    error AuthorizationAlreadyUsed();
+    error NoDisputeRaised();
+    error AmountExceedsMilestone();
+    error FundsAlreadyLocked();
+    error InvalidTotalAmount();
+    error DisputeAlreadyRaised();
+    error AlreadyFinalized();
+    error NotBuyerOrSeller();
+    error OnlyBuyer();
 
     struct Milestone {
         uint256 amount;
@@ -68,17 +101,17 @@ contract SmartChequeEscrow is
     event AuthorizationConsumed(bytes32 indexed authHash, uint256 indexed milestoneIndex);
 
     modifier onlyBuyer() {
-        require(msg.sender == buyer, "Only buyer can call this");
+        if (msg.sender != buyer) revert OnlyBuyer();
         _;
     }
 
     modifier onlyBuyerOrSeller() {
-        require(msg.sender == buyer || msg.sender == seller, "Unauthorized");
+        if (msg.sender != buyer && msg.sender != seller) revert NotBuyerOrSeller();
         _;
     }
 
     modifier notFinalized() {
-        require(!isFinalized, "Contract is finalized");
+        if (isFinalized) revert AlreadyFinalized();
         _;
     }
 
@@ -143,8 +176,8 @@ contract SmartChequeEscrow is
      * @param _token The ERC20 token to be used
      */
     function lockFunds(address _token) external onlyBuyer nonReentrant {
-        require(!isLocked, "Funds already locked");
-        require(_token != address(0), "Invalid token address");
+        if (isLocked) revert FundsAlreadyLocked();
+        if (_token == address(0)) revert InvalidTotalAmount();
 
         token = IERC20Upgradeable(_token);
         
@@ -186,20 +219,9 @@ contract SmartChequeEscrow is
         );
     }
 
-    // Minimal interface for registry
-    interface IObligationRegistry {
-        function verifyObligation(bytes32 obligationId) external returns (bool);
-        function getObligation(bytes32 obligationId) external view returns (
-            bytes32 hash,
-            address oracleAddress,
-            bytes4 oracleFunction,
-            bytes memory parameters,
-            bool isVerified,
-            uint256 verificationTimestamp
-        );
-    }
 
-    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal returns (bool) {
+
+    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal nonReentrant returns (bool) {
         bytes32 obligationId = milestones[milestoneIndex].obligationHash;
         bool success = true;
         if (obligationRegistry != address(0)) {
@@ -225,11 +247,11 @@ contract SmartChequeEscrow is
         uint256 milestoneIndex,
         bytes calldata proof
     ) internal {
-        require(milestoneIndex < milestones.length, "Invalid milestone index");
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
         Milestone storage milestone = milestones[milestoneIndex];
-        require(!milestone.isCompleted, "Milestone already completed");
-        require(!milestone.isDisputed, "Milestone is disputed");
-        require(_verifyMilestone(milestoneIndex, proof), "Invalid milestone proof");
+        if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
+        if (milestone.isDisputed) revert MilestoneDisputed();
+        if (!_verifyMilestone(milestoneIndex, proof)) revert InvalidSignature();
 
         milestone.isCompleted = true;
 
@@ -258,9 +280,9 @@ contract SmartChequeEscrow is
     function raiseDispute(
         uint256 milestoneIndex
     ) external onlyBuyerOrSeller nonReentrant notFinalized {
-        require(milestoneIndex < milestones.length, "Invalid milestone index");
-        require(!milestones[milestoneIndex].isCompleted, "Milestone already completed");
-        require(!milestones[milestoneIndex].isDisputed, "Dispute already raised");
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
+        if (milestones[milestoneIndex].isCompleted) revert MilestoneAlreadyCompleted();
+        if (milestones[milestoneIndex].isDisputed) revert DisputeAlreadyRaised();
 
         milestones[milestoneIndex].isDisputed = true;
         emit DisputeRaised(milestoneIndex, msg.sender);
@@ -275,8 +297,8 @@ contract SmartChequeEscrow is
         uint256 milestoneIndex,
         bool releaseFunds
     ) external nonReentrant notFinalized onlyRole(DISPUTE_MANAGER_ROLE) {
-        require(milestoneIndex < milestones.length, "Invalid milestone index");
-        require(milestones[milestoneIndex].isDisputed, "No dispute raised");
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
+        if (!milestones[milestoneIndex].isDisputed) revert NoDisputeRaised();
 
         Milestone storage milestone = milestones[milestoneIndex];
 
@@ -300,11 +322,11 @@ contract SmartChequeEscrow is
      * @param amountToSeller Amount to transfer to seller; remainder is refunded to buyer
      */
     function resolvePartialRelease(uint256 milestoneIndex, uint256 amountToSeller) external nonReentrant notFinalized onlyRole(DISPUTE_MANAGER_ROLE) {
-        require(milestoneIndex < milestones.length, "Invalid milestone index");
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
         Milestone storage milestone = milestones[milestoneIndex];
-        require(milestone.isDisputed, "No dispute raised");
-        require(!milestone.isCompleted, "Milestone already completed");
-        require(amountToSeller <= milestone.amount, "Amount exceeds milestone");
+        if (!milestone.isDisputed) revert NoDisputeRaised();
+        if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
+        if (amountToSeller > milestone.amount) revert AmountExceedsMilestone();
 
         milestone.isDisputed = false;
         milestone.isCompleted = amountToSeller == milestone.amount;
@@ -346,7 +368,7 @@ contract SmartChequeEscrow is
         bool isCompleted,
         bool isDisputed
     ) {
-        require(index < milestones.length, "Invalid milestone index");
+        if (index >= milestones.length) revert InvalidMilestoneIndex();
         Milestone storage milestone = milestones[index];
         return (
             milestone.amount,
@@ -367,7 +389,7 @@ contract SmartChequeEscrow is
         uint256 milestoneIndex,
         bytes calldata proof
     ) external nonReentrant notFinalized {
-        require(isLocked, "Funds not locked");
+        if (!isLocked) revert FundsNotLocked();
         _completeMilestone(milestoneIndex, proof);
     }
 
@@ -386,27 +408,27 @@ contract SmartChequeEscrow is
         uint256 deadline,
         bytes calldata signature
     ) external nonReentrant notFinalized {
-        require(isLocked, "Funds not locked");
-        require(authorizationMode == AuthorizationMode.OffChainSigned, "OffChainSigned disabled");
-        require(signer != address(0), "Signer not set");
-        require(block.timestamp <= deadline, "Authorization expired");
-        require(milestoneIndex < milestones.length, "Invalid milestone index");
+        if (!isLocked) revert FundsNotLocked();
+        if (authorizationMode != AuthorizationMode.OffChainSigned) revert OffChainSignedDisabled();
+        if (signer == address(0)) revert SignerNotSet();
+        if (block.timestamp > deadline) revert AuthorizationExpired();
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
 
         Milestone storage milestone = milestones[milestoneIndex];
-        require(!milestone.isCompleted, "Milestone already completed");
-        require(!milestone.isDisputed, "Milestone is disputed");
-        require(recipient == seller, "Invalid recipient");
+        if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
+        if (milestone.isDisputed) revert MilestoneDisputed();
+        if (recipient != seller) revert InvalidRecipient();
 
         bytes32 digest = _hashMilestone(escrowId, milestoneIndex, milestone.amount, recipient, deadline);
         address recovered = ECDSAUpgradeable.recover(digest, signature);
-        require(recovered == signer, "Invalid signature");
+        if (recovered != signer) revert InvalidSignature();
 
         // Enhanced authorization replay protection
         bytes32 authHash = keccak256(abi.encodePacked(digest, milestoneIndex, block.chainid));
-        require(!consumedAuthorizations[authHash], "Authorization already used");
+        if (consumedAuthorizations[authHash]) revert AuthorizationAlreadyUsed();
         
         // Check milestone hasn't been completed
-        require(!milestone.isCompleted, "Milestone already completed");
+        if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
         
         // Mark authorization as used and milestone as completed
         consumedAuthorizations[authHash] = true;

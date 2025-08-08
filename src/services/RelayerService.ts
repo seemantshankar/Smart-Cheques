@@ -7,7 +7,7 @@ class SimpleMerkleTree {
   private tree: string[][];
 
   constructor(leaves: string[]) {
-    this.leaves = leaves.length > 0 ? leaves : [ethers.utils.keccak256('0x')];
+    this.leaves = leaves.length > 0 ? leaves : [ethers.keccak256('0x')];
     this.tree = this.buildTree();
   }
 
@@ -21,7 +21,7 @@ class SimpleMerkleTree {
         const left = currentLevel[i];
         const right = i + 1 < currentLevel.length ? currentLevel[i + 1] : left;
         const combined = left <= right ? left + right.slice(2) : right + left.slice(2);
-        nextLevel.push(ethers.utils.keccak256(combined));
+        nextLevel.push(ethers.keccak256(combined));
       }
       tree.push(nextLevel);
       currentLevel = nextLevel;
@@ -95,8 +95,8 @@ interface ValidatorSignature {
 }
 
 interface RelayerConfig {
-  l1Provider: ethers.providers.Provider;
-  l2Provider: ethers.providers.Provider;
+  l1Provider: ethers.Provider;
+  l2Provider: ethers.Provider;
   l1BridgeAddress: string;
   l2BridgeAddress: string;
   nativeBridgeAddress: string;

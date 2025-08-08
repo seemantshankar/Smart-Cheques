@@ -33,7 +33,7 @@ const Dashboard = () => {
   const [stats, setStats] = useState({
     totalCheques: 0,
     activeCheques: 0,
-    totalValue: ethers.BigNumber.from(0)
+    totalValue: 0n
   });
 
   const cardBg = useColorModeValue('white', 'gray.700');
@@ -52,8 +52,8 @@ const Dashboard = () => {
           // Calculate stats
           const active = data.cheques.filter((c: Cheque) => c.status === '1').length;
           const totalValue = data.cheques.reduce(
-            (acc: ethers.BigNumber, c: Cheque) => acc.add(ethers.BigNumber.from(c.totalAmount)),
-            ethers.BigNumber.from(0)
+            (acc: bigint, c: Cheque) => acc + BigInt(c.totalAmount),
+            0n
           );
 
           setStats({
@@ -122,7 +122,7 @@ const Dashboard = () => {
         <Stat>
           <StatLabel>Total Value</StatLabel>
           <StatNumber>
-            {ethers.utils.formatEther(stats.totalValue)} ETH
+            {ethers.formatEther(stats.totalValue)} ETH
           </StatNumber>
         </Stat>
       </StatGroup>
@@ -176,7 +176,7 @@ const Dashboard = () => {
                   Amount
                 </Text>
                 <Text fontWeight="bold" mb={4}>
-                  {ethers.utils.formatEther(cheque.totalAmount)} ETH
+                  {ethers.formatEther(cheque.totalAmount)} ETH
                 </Text>
 
                 {getStatusBadge(cheque.status)}

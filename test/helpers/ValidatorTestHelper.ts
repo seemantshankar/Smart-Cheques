@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { ethers } from "hardhat";
 import { expect } from "chai";
+import { randomBytes } from "crypto";
 
 /**
  * Helper functions for validator testing
@@ -15,12 +16,12 @@ export class ValidatorTestHelper {
   ) {
     // Approve tokens for staking
     await governanceToken.connect(validator).approve(
-      validatorManager.address,
+      await validatorManager.getAddress(),
       stakeAmount
     );
     
     // Register validator with proper parameters
-    const publicKey = ethers.utils.randomBytes(32);
+    const publicKey = randomBytes(32);
     const moniker = "Test Validator";
     const commission = 1000; // 10%
     
@@ -32,11 +33,11 @@ export class ValidatorTestHelper {
     );
     
     // Verify validator is active
-    const isActive = await validatorManager.isValidatorActive(validator.address);
+    const isActive = await validatorManager.isValidatorActive(validator.target);
     expect(isActive).to.be.true;
     
     return {
-      validator: validator.address,
+      validator: validator.target,
       stakeAmount,
       publicKey,
       moniker,
@@ -58,7 +59,7 @@ export class ValidatorTestHelper {
     expect(slashAmount).to.be.lte(initialStake);
     
     // Perform slashing
-    const evidence = ethers.utils.randomBytes(32);
+    const evidence = randomBytes(32);
     await validatorManager.connect(slasher).slashValidator(
       validatorAddress,
       reason,
@@ -68,7 +69,7 @@ export class ValidatorTestHelper {
     
     // Verify slashing occurred
     const finalStake = await validatorManager.getValidatorStake(validatorAddress);
-    expect(finalStake).to.equal(initialStake.sub(slashAmount));
+    expect(finalStake).to.equal(initialStake - slashAmount);
     
     return {
       initialStake,
@@ -171,11 +172,11 @@ it("Should handle validator slashing correctly", async function() {
     validatorManager,
     governanceToken,
     validator,
-    ethers.utils.parseEther("1000")
+    parseEther("1000")
   );
   
   // Test slashing
-  const slashAmount = ethers.utils.parseEther("100");
+  const slashAmount = parseEther("100");
   await ValidatorTestHelper.testValidatorSlashing(
     validatorManager,
     slasher,
@@ -194,7 +195,7 @@ it("Should handle block production correctly", async function() {
     validatorManager,
     governanceToken,
     validator,
-    ethers.utils.parseEther("1000")
+    parseEther("1000")
   );
   
   // Test block production

@@ -26,6 +26,7 @@ contract NativeBridge is
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     // Constants
     uint256 public constant CHALLENGE_PERIOD = 7 days;
@@ -177,10 +178,10 @@ contract NativeBridge is
         __Pausable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _admin);
         _grantRole(UPGRADER_ROLE, _admin);
         
-        // Intentionally left blank to complete initialization sequence
         minValidatorStake = _minValidatorStake;
         emergencyWithdrawalDelay = _emergencyWithdrawalDelay;
         nativeDepositNonce = 1;
@@ -363,53 +364,7 @@ contract NativeBridge is
         emit EmergencyWithdrawal(recipient, amount, reason);
     }
 
-    /**
-     * @dev Add validator with stake
-     * @param validator Validator address
-     * @param stake Stake amount
-     */
-    function addValidator(
-        address validator,
-        uint256 stake
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (stake < minValidatorStake) revert InsufficientStake();
-        if (validatorStakes[validator] > 0) revert InvalidValidator();
 
-        validators.push(validator);
-        validatorStakes[validator] = stake;
-        totalValidatorStake += stake;
-        
-        _grantRole(VALIDATOR_ROLE, validator);
-        
-        emit ValidatorAdded(validator, stake);
-    }
-
-    /**
-     * @dev Remove validator
-     * @param validator Validator address
-     */
-    function removeValidator(
-        address validator
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        uint256 stake = validatorStakes[validator];
-        if (stake == 0) revert InvalidValidator();
-
-        // Remove from validators array
-        for (uint256 i = 0; i < validators.length; i++) {
-            if (validators[i] == validator) {
-                validators[i] = validators[validators.length - 1];
-                validators.pop();
-                break;
-            }
-        }
-
-        validatorStakes[validator] = 0;
-        totalValidatorStake -= stake;
-        
-        _revokeRole(VALIDATOR_ROLE, validator);
-        
-        emit ValidatorRemoved(validator, stake);
-    }
 
     /**
      * @dev Update Merkle root with validator consensus
@@ -497,9 +452,102 @@ contract NativeBridge is
     }
 
     /**
+     * @dev Add a validator to the validator set
+     * @param validator Validator address to add
+     * @param stake Amount of tokens staked by validator
+     */
+    function addValidator(address validator, uint256 stake) external onlyRole(ADMIN_ROLE) {
+        if (validator == address(0)) revert ZeroAddress();
+        if (stake < minValidatorStake) revert InsufficientStake();
+        if (validatorStakes[validator] != 0) revert InvalidValidator();
+        
+        validatorStakes[validator] = stake;
+        totalValidatorStake += stake;
+        validators.push(validator);
+        
+        _grantRole(VALIDATOR_ROLE, validator);
+        
+        emit ValidatorAdded(validator, stake);
+    }
+
+    /**
+     * @dev Remove a validator from the validator set
+     * @param validator Validator address to remove
+     */
+    function removeValidator(address validator) external onlyRole(ADMIN_ROLE) {
+        if (validatorStakes[validator] == 0) revert NotValidator();
+        
+        uint256 stake = validatorStakes[validator];
+        validatorStakes[validator] = 0;
+        totalValidatorStake -= stake;
+        
+        // Remove from validators array
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validators[i] == validator) {
+                validators[i] = validators[validators.length - 1];
+                validators.pop();
+                break;
+            }
+        }
+        
+        _revokeRole(VALIDATOR_ROLE, validator);
+        
+        emit ValidatorRemoved(validator, stake);
+    }
+
+    /**
+     * @dev Grant relayer role to an address
+     * @param relayer Address to grant relayer role
+     */
+    function grantRelayerRole(address relayer) external onlyRole(ADMIN_ROLE) {
+        if (relayer == address(0)) revert ZeroAddress();
+        _grantRole(RELAYER_ROLE, relayer);
+    }
+
+    /**
+     * @dev Revoke relayer role from an address
+     * @param relayer Address to revoke relayer role
+     */
+    function revokeRelayerRole(address relayer) external onlyRole(ADMIN_ROLE) {
+        _revokeRole(RELAYER_ROLE, relayer);
+    }
+
+    /**
+     * @dev Batch grant roles for initial setup
+     * @param relayers Array of relayer addresses
+     * @param validatorsData Array of validator addresses and stakes
+     */
+    function batchSetupRoles(
+        address[] calldata relayers,
+        address[] calldata validatorsData,
+        uint256[] calldata stakes
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (relayers.length > 10) revert InvalidAmount();
+        if (validatorsData.length != stakes.length) revert InvalidAmount();
+        if (validatorsData.length > 100) revert InvalidAmount();
+        
+        // Grant relayer roles
+        for (uint256 i = 0; i < relayers.length; i++) {
+            if (relayers[i] != address(0)) {
+                _grantRole(RELAYER_ROLE, relayers[i]);
+            }
+        }
+        
+        // Add validators
+        for (uint256 i = 0; i < validatorsData.length; i++) {
+            if (validatorsData[i] != address(0) && stakes[i] >= minValidatorStake) {
+                validatorStakes[validatorsData[i]] = stakes[i];
+                totalValidatorStake += stakes[i];
+                validators.push(validatorsData[i]);
+                _grantRole(VALIDATOR_ROLE, validatorsData[i]);
+                emit ValidatorAdded(validatorsData[i], stakes[i]);
+            }
+        }
+    }
+
+    /**
      * @dev Authorize upgrade
      */
-    // Required by UUPS proxy; restricts who can upgrade implementation
     function _authorizeUpgrade(address) internal override onlyRole(UPGRADER_ROLE) {
         // no-op: access control enforced by onlyRole(UPGRADER_ROLE); required by UUPS pattern
         bool __noop = true; // satisfies no-empty-blocks without changing logic

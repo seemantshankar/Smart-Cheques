@@ -1,7 +1,6 @@
 import { HardhatUserConfig } from "hardhat/config";
-import "hardhat-gas-reporter";
-import "@nomiclabs/hardhat-ethers";
-import "@nomiclabs/hardhat-waffle";
+import "@nomicfoundation/hardhat-ethers";
+import "@nomicfoundation/hardhat-chai-matchers";
 import "@nomiclabs/hardhat-etherscan";
 import "@openzeppelin/hardhat-upgrades";
 import "@typechain/hardhat";
@@ -11,7 +10,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const config: HardhatUserConfig = {
+const config = {
   solidity: {
     compilers: [
       {
@@ -50,11 +49,12 @@ const config: HardhatUserConfig = {
   gasReporter: {
     enabled: process.env.REPORT_GAS !== undefined,
     currency: "USD",
-    coinmarketcap: process.env.COINMARKETCAP_API_KEY
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY || undefined,
+    token: "ETH"
   },
   typechain: {
     outDir: "typechain",
-    target: "ethers-v5"
+    target: "ethers-v6"
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY
@@ -62,6 +62,6 @@ const config: HardhatUserConfig = {
   mocha: {
     timeout: 100000
   }
-};
+} as HardhatUserConfig;
 
 export default config;

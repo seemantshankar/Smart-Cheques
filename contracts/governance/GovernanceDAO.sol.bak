@@ -1,0 +1,415 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts-upgradeable/governance/GovernorUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorSettingsUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorCountingSimpleUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesQuorumFractionUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorTimelockControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/governance/TimelockController.sol";
+import "./GovernanceToken.sol";
+
+/**
+ * @title GovernanceDAO
+ * @dev Main governance contract for Smart Cheques protocol
+ * Handles proposals, voting, and execution of governance decisions
+ */
+contract GovernanceDAO is
+    Initializable,
+    GovernorUpgradeable,
+    GovernorSettingsUpgradeable,
+    GovernorCountingSimpleUpgradeable,
+    GovernorVotesUpgradeable,
+    GovernorVotesQuorumFractionUpgradeable,
+    GovernorTimelockControlUpgradeable,
+    AccessControlUpgradeable,
+    UUPSUpgradeable
+{
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant PROPOSER_ROLE = keccak256("PROPOSER_ROLE");
+    bytes32 public constant EXECUTOR_ROLE = keccak256("EXECUTOR_ROLE");
+    bytes32 public constant CANCELLER_ROLE = keccak256("CANCELLER_ROLE");
+
+    // Governance parameters
+    uint256 public constant MIN_PROPOSAL_THRESHOLD = 1000e18; // 1000 tokens
+    uint256 public constant MAX_PROPOSAL_THRESHOLD = 100000e18; // 100k tokens
+    uint256 public constant MIN_VOTING_DELAY = 1 days;
+    uint256 public constant MAX_VOTING_DELAY = 7 days;
+    uint256 public constant MIN_VOTING_PERIOD = 3 days;
+    uint256 public constant MAX_VOTING_PERIOD = 14 days;
+    uint256 public constant MIN_QUORUM_FRACTION = 4; // 4%
+    uint256 public constant MAX_QUORUM_FRACTION = 20; // 20%
+
+    // Emergency governance
+    bool public emergencyMode;
+    uint256 public emergencyVotingPeriod;
+    uint256 public emergencyQuorumFraction;
+    mapping(address => bool) public emergencyCouncil;
+    uint256 public emergencyCouncilSize;
+
+    // Proposal categories
+    enum ProposalCategory {
+        PROTOCOL_UPGRADE,
+        PARAMETER_CHANGE,
+        TREASURY_ALLOCATION,
+        EMERGENCY_ACTION,
+        VALIDATOR_MANAGEMENT
+    }
+
+    struct ProposalMetadata {
+        ProposalCategory category;
+        string title;
+        string description;
+        uint256 executionDelay;
+        bool requiresEmergencyCouncil;
+    }
+
+    mapping(uint256 => ProposalMetadata) public proposalMetadata;
+    mapping(uint256 => bool) public emergencyProposals;
+
+    // Events
+    event ProposalCreatedWithMetadata(
+        uint256 indexed proposalId,
+        address indexed proposer,
+        ProposalCategory indexed category,
+        string title,
+        string description
+    );
+    
+    event EmergencyModeToggled(bool enabled, address indexed admin);
+    event EmergencyCouncilUpdated(address indexed member, bool added);
+    event GovernanceParametersUpdated(
+        uint256 votingDelay,
+        uint256 votingPeriod,
+        uint256 proposalThreshold,
+        uint256 quorumFraction
+    );
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /**
+     * @dev Initialize the governance contract
+     * @param _token Governance token address
+     * @param _timelock Timelock controller address
+     * @param _votingDelay Delay before voting starts
+     * @param _votingPeriod Duration of voting period
+     * @param _proposalThreshold Minimum tokens needed to create proposal
+     * @param _quorumFraction Percentage of total supply needed for quorum
+     */
+    function initialize(
+        GovernanceToken _token,
+        TimelockController _timelock,
+        uint256 _votingDelay,
+        uint256 _votingPeriod,
+        uint256 _proposalThreshold,
+        uint256 _quorumFraction
+    ) public initializer {
+        require(address(_token) != address(0), "Invalid token address");
+        require(address(_timelock) != address(0), "Invalid timelock address");
+        require(_votingDelay >= MIN_VOTING_DELAY && _votingDelay <= MAX_VOTING_DELAY, "Invalid voting delay");
+        require(_votingPeriod >= MIN_VOTING_PERIOD && _votingPeriod <= MAX_VOTING_PERIOD, "Invalid voting period");
+        require(_proposalThreshold >= MIN_PROPOSAL_THRESHOLD && _proposalThreshold <= MAX_PROPOSAL_THRESHOLD, "Invalid proposal threshold");
+        require(_quorumFraction >= MIN_QUORUM_FRACTION && _quorumFraction <= MAX_QUORUM_FRACTION, "Invalid quorum fraction");
+
+        __Governor_init("Smart Cheques DAO");
+        __GovernorSettings_init(_votingDelay, _votingPeriod, _proposalThreshold);
+        __GovernorCountingSimple_init();
+        __GovernorVotes_init(IVotes(address(_token)));
+        __GovernorVotesQuorumFraction_init(_quorumFraction);
+        __GovernorTimelockControl_init(_timelock);
+        __AccessControl_init();
+        __UUPSUpgradeable_init();
+
+        // Set up roles
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
+        _grantRole(PROPOSER_ROLE, address(_timelock));
+        _grantRole(EXECUTOR_ROLE, address(_timelock));
+        _grantRole(CANCELLER_ROLE, msg.sender);
+
+        // Emergency governance settings
+        emergencyVotingPeriod = 1 days;
+        emergencyQuorumFraction = 10; // 10%
+    }
+
+    /**
+     * @dev Create a proposal with metadata
+     * @param targets Target addresses for proposal calls
+     * @param values ETH values for proposal calls
+     * @param calldatas Encoded function calls
+     * @param description Proposal description
+     * @param category Proposal category
+     * @param title Proposal title
+     * @param executionDelay Additional delay before execution
+     * @param requiresEmergencyCouncil Whether emergency council approval is needed
+     * @return proposalId The ID of the created proposal
+     */
+    function proposeWithMetadata(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        string memory description,
+        ProposalCategory category,
+        string memory title,
+        uint256 executionDelay,
+        bool requiresEmergencyCouncil
+    ) public returns (uint256) {
+        uint256 proposalId = propose(targets, values, calldatas, description);
+        
+        proposalMetadata[proposalId] = ProposalMetadata({
+            category: category,
+            title: title,
+            description: description,
+            executionDelay: executionDelay,
+            requiresEmergencyCouncil: requiresEmergencyCouncil
+        });
+
+        emit ProposalCreatedWithMetadata(
+            proposalId,
+            msg.sender,
+            category,
+            title,
+            description
+        );
+
+        return proposalId;
+    }
+
+    /**
+     * @dev Create an emergency proposal
+     * @param targets Target addresses for proposal calls
+     * @param values ETH values for proposal calls
+     * @param calldatas Encoded function calls
+     * @param description Proposal description
+     * @param title Proposal title
+     * @return proposalId The ID of the created emergency proposal
+     */
+    function proposeEmergency(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        string memory description,
+        string memory title
+    ) public onlyRole(PROPOSER_ROLE) returns (uint256) {
+        require(emergencyMode || emergencyCouncil[msg.sender], "Emergency proposal not allowed");
+        
+        uint256 proposalId = propose(targets, values, calldatas, description);
+        
+        emergencyProposals[proposalId] = true;
+        proposalMetadata[proposalId] = ProposalMetadata({
+            category: ProposalCategory.EMERGENCY_ACTION,
+            title: title,
+            description: description,
+            executionDelay: 0,
+            requiresEmergencyCouncil: true
+        });
+
+        emit ProposalCreatedWithMetadata(
+            proposalId,
+            msg.sender,
+            ProposalCategory.EMERGENCY_ACTION,
+            title,
+            description
+        );
+
+        return proposalId;
+    }
+
+    /**
+     * @dev Toggle emergency mode
+     * @param enabled Whether to enable emergency mode
+     */
+    function setEmergencyMode(bool enabled) external onlyRole(ADMIN_ROLE) {
+        emergencyMode = enabled;
+        emit EmergencyModeToggled(enabled, msg.sender);
+    }
+
+    /**
+     * @dev Add or remove emergency council member
+     * @param member Address to add/remove
+     * @param add Whether to add or remove
+     */
+    function updateEmergencyCouncil(address member, bool add) external onlyRole(ADMIN_ROLE) {
+        require(member != address(0), "Invalid member address");
+        
+        if (add && !emergencyCouncil[member]) {
+            emergencyCouncil[member] = true;
+            emergencyCouncilSize++;
+        } else if (!add && emergencyCouncil[member]) {
+            emergencyCouncil[member] = false;
+            emergencyCouncilSize--;
+        }
+        
+        emit EmergencyCouncilUpdated(member, add);
+    }
+
+    /**
+     * @dev Update governance parameters
+     * @param newVotingDelay New voting delay
+     * @param newVotingPeriod New voting period
+     * @param newProposalThreshold New proposal threshold
+     * @param newQuorumFraction New quorum fraction
+     */
+    function updateGovernanceParameters(
+        uint256 newVotingDelay,
+        uint256 newVotingPeriod,
+        uint256 newProposalThreshold,
+        uint256 newQuorumFraction
+    ) external onlyGovernance {
+        require(newVotingDelay >= MIN_VOTING_DELAY && newVotingDelay <= MAX_VOTING_DELAY, "Invalid voting delay");
+        require(newVotingPeriod >= MIN_VOTING_PERIOD && newVotingPeriod <= MAX_VOTING_PERIOD, "Invalid voting period");
+        require(newProposalThreshold >= MIN_PROPOSAL_THRESHOLD && newProposalThreshold <= MAX_PROPOSAL_THRESHOLD, "Invalid proposal threshold");
+        require(newQuorumFraction >= MIN_QUORUM_FRACTION && newQuorumFraction <= MAX_QUORUM_FRACTION, "Invalid quorum fraction");
+
+        _setVotingDelay(newVotingDelay);
+        _setVotingPeriod(newVotingPeriod);
+        _setProposalThreshold(newProposalThreshold);
+        _updateQuorumNumerator(newQuorumFraction);
+
+        emit GovernanceParametersUpdated(
+            newVotingDelay,
+            newVotingPeriod,
+            newProposalThreshold,
+            newQuorumFraction
+        );
+    }
+
+    /**
+     * @dev Get proposal metadata
+     * @param proposalId Proposal ID
+     * @return metadata Proposal metadata
+     */
+    function getProposalMetadata(uint256 proposalId) external view returns (ProposalMetadata memory) {
+        return proposalMetadata[proposalId];
+    }
+
+    /**
+     * @dev Check if proposal is emergency proposal
+     * @param proposalId Proposal ID
+     * @return isEmergency Whether proposal is emergency
+     */
+    function isEmergencyProposal(uint256 proposalId) external view returns (bool) {
+        return emergencyProposals[proposalId];
+    }
+
+    // Required overrides
+    function votingDelay() public view override(GovernorUpgradeable, GovernorSettingsUpgradeable) returns (uint256) {
+        return super.votingDelay();
+    }
+
+    function votingPeriod() public view override(GovernorUpgradeable, GovernorSettingsUpgradeable) returns (uint256) {
+        return emergencyMode ? emergencyVotingPeriod : super.votingPeriod();
+    }
+
+    function quorum(uint256 blockNumber)
+        public
+        view
+        override(GovernorUpgradeable, GovernorVotesQuorumFractionUpgradeable)
+        returns (uint256)
+    {
+        if (emergencyMode) {
+            return (token().getPastTotalSupply(blockNumber) * emergencyQuorumFraction) / 100;
+        }
+        return super.quorum(blockNumber);
+    }
+
+    function proposalEta(uint256 proposalId)
+        public
+        view
+        override(GovernorUpgradeable, GovernorTimelockControlUpgradeable)
+        returns (uint256)
+    {
+        return super.proposalEta(proposalId);
+    }
+
+    function proposalNeedsQueuing(uint256 proposalId)
+        public
+        view
+        override(GovernorUpgradeable, GovernorTimelockControlUpgradeable)
+        returns (bool)
+    {
+        return super.proposalNeedsQueuing(proposalId);
+    }
+
+    function _queueOperations(
+        uint256 proposalId,
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        bytes32 descriptionHash
+    ) internal override(GovernorUpgradeable, GovernorTimelockControlUpgradeable) returns (uint48) {
+        return super._queueOperations(proposalId, targets, values, calldatas, descriptionHash);
+    }
+
+    function getVotes(address account, uint256 blockNumber)
+        public
+        view
+        override(IGovernorUpgradeable, GovernorUpgradeable)
+        returns (uint256)
+    {
+        return super.getVotes(account, blockNumber);
+    }
+
+    function state(uint256 proposalId)
+        public
+        view
+        override(GovernorUpgradeable, GovernorTimelockControlUpgradeable)
+        returns (ProposalState)
+    {
+        return super.state(proposalId);
+    }
+
+    function propose(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        string memory description
+    ) public override(IGovernorUpgradeable, GovernorUpgradeable) returns (uint256) {
+        return super.propose(targets, values, calldatas, description);
+    }
+
+    function proposalThreshold() public view override(GovernorUpgradeable, GovernorSettingsUpgradeable) returns (uint256) {
+        return super.proposalThreshold();
+    }
+
+    function _execute(
+        uint256 proposalId,
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        bytes32 descriptionHash
+    ) internal override(GovernorUpgradeable, GovernorTimelockControlUpgradeable) {
+        super._execute(proposalId, targets, values, calldatas, descriptionHash);
+    }
+
+    function _cancel(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        bytes32 descriptionHash
+    ) internal override(GovernorUpgradeable, GovernorTimelockControlUpgradeable) returns (uint256) {
+        return super._cancel(targets, values, calldatas, descriptionHash);
+    }
+
+    function _executor() internal view override(GovernorUpgradeable, GovernorTimelockControlUpgradeable) returns (address) {
+        return super._executor();
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(GovernorUpgradeable, GovernorTimelockControlUpgradeable, AccessControlUpgradeable)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+}

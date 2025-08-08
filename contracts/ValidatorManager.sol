@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./GovernanceToken.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
+import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {GovernanceToken} from "./GovernanceToken.sol";
 
 /**
  * @title ValidatorManager
@@ -17,10 +17,27 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     using SafeMath for uint256;
     using SafeERC20 for GovernanceToken;
     
+    // Custom errors
+    error InsufficientStake();
+    error ValidatorAlreadyRegistered();
+    error CommissionTooHigh();
+    error MaxValidatorsReached();
+    error ValidatorNotActive();
+    error InvalidAmount();
+    error InsufficientDelegation();
+    error ValidatorNotJailed();
+    error InvalidAddress();
+    error TooManyOracles();
+    error TooManySequencers();
+    error SlashingPercentageTooHigh();
+    error ValidatorIsJailed();
+    
     // Roles
     bytes32 public constant SLASHER_ROLE = keccak256("SLASHER_ROLE");
     bytes32 public constant GOVERNANCE_ROLE = keccak256("GOVERNANCE_ROLE");
     bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
+    bytes32 public constant SEQUENCER_ROLE = keccak256("SEQUENCER_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     
     // Validator status
     enum ValidatorStatus {
@@ -113,6 +130,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         governanceToken = GovernanceToken(_governanceToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(GOVERNANCE_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
         treasuryAddress = msg.sender; // default; should be set post-deploy via governance to TREASURY_ADDRESS
     }
     
@@ -129,10 +147,10 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         string memory moniker,
         uint256 commission
     ) external nonReentrant whenNotPaused {
-        require(stake >= minValidatorStake, "Insufficient stake");
-        require(validators[msg.sender].validator == address(0), "Already registered");
-        require(commission <= maxCommission, "Commission too high");
-        require(activeValidators.length < maxValidators, "Max validators reached");
+        if (stake < minValidatorStake) revert InsufficientStake();
+        if (validators[msg.sender].validator != address(0)) revert ValidatorAlreadyRegistered();
+        if (commission > maxCommission) revert CommissionTooHigh();
+        if (activeValidators.length >= maxValidators) revert MaxValidatorsReached();
         
         // Transfer stake to contract
         governanceToken.safeTransferFrom(msg.sender, address(this), stake);
@@ -169,8 +187,8 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      * @param amount Amount to delegate
      */
     function delegate(address validator, uint256 amount) external nonReentrant whenNotPaused {
-        require(validators[validator].status == ValidatorStatus.ACTIVE, "Validator not active");
-        require(amount > 0, "Amount must be positive");
+        if (validators[validator].status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
+        if (amount == 0) revert InvalidAmount();
         
         // Transfer tokens to contract
         governanceToken.safeTransferFrom(msg.sender, address(this), amount);
@@ -194,7 +212,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function undelegate(address validator, uint256 amount) external nonReentrant {
         DelegationInfo storage delegation = delegations[msg.sender][validator];
-        require(delegation.amount >= amount, "Insufficient delegation");
+        if (delegation.amount < amount) revert InsufficientDelegation();
         
         // Update delegation
         delegation.amount = delegation.amount.sub(amount);
@@ -221,7 +239,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         bytes memory evidence
     ) external onlyRole(SLASHER_ROLE) {
         ValidatorInfo storage validatorInfo = validators[validator];
-        require(validatorInfo.status == ValidatorStatus.ACTIVE, "Validator not active");
+        if (validatorInfo.status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
         
         uint256 slashAmount = validatorInfo.stake.mul(slashingPercentages).div(10000);
         
@@ -248,7 +266,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         
         // Transfer slashed tokens to treasury or governance
         address slashAddress = getSlashAddress();
-        require(slashAddress != address(0), "Slash address not set");
+        if (slashAddress == address(0)) revert InvalidAddress();
         governanceToken.safeTransfer(slashAddress, slashAmount);
         
         emit ValidatorSlashed(validator, reason, slashAmount);
@@ -261,7 +279,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function jailValidator(address validator, SlashingReason reason) external onlyRole(SLASHER_ROLE) {
         ValidatorInfo storage validatorInfo = validators[validator];
-        require(validatorInfo.status == ValidatorStatus.ACTIVE, "Validator not active");
+        if (validatorInfo.status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
         
         validatorInfo.status = ValidatorStatus.JAILED;
         validatorInfo.jailTime = block.timestamp;
@@ -276,13 +294,10 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function unjailValidator() external {
         ValidatorInfo storage validatorInfo = validators[msg.sender];
-        require(validatorInfo.status == ValidatorStatus.JAILED, "Validator not jailed");
-        require(
-            block.timestamp >= validatorInfo.jailTime.add(jailDuration),
-            "Jail period not completed"
-        );
-        require(validatorInfo.stake >= minValidatorStake, "Insufficient stake");
-        require(activeValidators.length < maxValidators, "Max validators reached");
+        if (validatorInfo.status != ValidatorStatus.JAILED) revert ValidatorNotJailed();
+        if (block.timestamp < validatorInfo.jailTime.add(jailDuration)) revert InvalidAmount();
+        if (validatorInfo.stake < minValidatorStake) revert InsufficientStake();
+        if (activeValidators.length >= maxValidators) revert MaxValidatorsReached();
         
         validatorInfo.status = ValidatorStatus.ACTIVE;
         validatorInfo.jailTime = 0;
@@ -304,11 +319,11 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         external 
         onlyRole(ORACLE_ROLE) 
     {
-        require(isValidatorActive(validator), "Validator not active");
-        require(!isJailed(validator), "Validator is jailed");
+        if (!isValidatorActive(validator)) revert ValidatorNotActive();
+        if (isJailed(validator)) revert ValidatorIsJailed();
         
         ValidatorInfo storage validatorInfo = validators[validator];
-        require(validatorInfo.stake >= minValidatorStake, "Insufficient stake");
+        if (validatorInfo.stake < minValidatorStake) revert InsufficientStake();
         
         validatorInfo.lastActiveBlock = blockNumber;
         validatorInfo.missedBlocks = 0; // Reset missed blocks counter
@@ -361,8 +376,69 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      * @dev Sets the treasury address that receives slashed tokens
      */
     function setTreasuryAddress(address newTreasury) external onlyRole(GOVERNANCE_ROLE) {
-        require(newTreasury != address(0), "Invalid treasury");
+        if (newTreasury == address(0)) revert InvalidAddress();
         treasuryAddress = newTreasury;
+    }
+
+    /**
+     * @dev Grant oracle role to an address
+     * @param oracle Address to grant oracle role
+     */
+    function grantOracleRole(address oracle) external onlyRole(ADMIN_ROLE) {
+        if (oracle == address(0)) revert InvalidAddress();
+        _grantRole(ORACLE_ROLE, oracle);
+    }
+
+    /**
+     * @dev Revoke oracle role from an address
+     * @param oracle Address to revoke oracle role
+     */
+    function revokeOracleRole(address oracle) external onlyRole(ADMIN_ROLE) {
+        _revokeRole(ORACLE_ROLE, oracle);
+    }
+
+    /**
+     * @dev Grant sequencer role to an address
+     * @param sequencer Address to grant sequencer role
+     */
+    function grantSequencerRole(address sequencer) external onlyRole(ADMIN_ROLE) {
+        if (sequencer == address(0)) revert InvalidAddress();
+        _grantRole(SEQUENCER_ROLE, sequencer);
+    }
+
+    /**
+     * @dev Revoke sequencer role from an address
+     * @param sequencer Address to revoke sequencer role
+     */
+    function revokeSequencerRole(address sequencer) external onlyRole(ADMIN_ROLE) {
+        _revokeRole(SEQUENCER_ROLE, sequencer);
+    }
+
+    /**
+     * @dev Batch grant roles for initial setup
+     * @param oracles Array of oracle addresses
+     * @param sequencers Array of sequencer addresses
+     */
+    function batchSetupRoles(
+        address[] calldata oracles,
+        address[] calldata sequencers
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (oracles.length > 20) revert TooManyOracles();
+        if (sequencers.length > 10) revert TooManySequencers();
+        
+        // Grant oracle roles
+        for (uint256 i = 0; i < oracles.length; i++) {
+            if (oracles[i] != address(0)) {
+                _grantRole(ORACLE_ROLE, oracles[i]);
+            }
+        }
+        
+        // Grant sequencer roles
+        for (uint256 i = 0; i < sequencers.length; i++) {
+            if (sequencers[i] != address(0)) {
+                _grantRole(SEQUENCER_ROLE, sequencers[i]);
+            }
+        }
     }
     
     /**
@@ -388,7 +464,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function _jailValidator(address validator, SlashingReason reason) internal {
          ValidatorInfo storage validatorInfo = validators[validator];
-         require(validatorInfo.status == ValidatorStatus.ACTIVE, "Validator not active");
+         if (validatorInfo.status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
          
          validatorInfo.status = ValidatorStatus.JAILED;
          validatorInfo.jailedUntil = block.timestamp + jailDuration;
@@ -419,11 +495,23 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @dev Get active validators list
-     * @return List of active validator addresses
+     * @dev Get active validators
+     * @return Array of active validator addresses
      */
     function getActiveValidators() external view returns (address[] memory) {
         return activeValidators;
+    }
+
+    /**
+     * @dev Get validator stake and active status
+     * @param validator Validator address
+     * @return stake Amount staked by validator
+     * @return isActive Whether validator is active
+     */
+    function getValidatorStake(address validator) external view returns (uint256 stake, bool isActive) {
+        ValidatorInfo memory info = validators[validator];
+        stake = info.stake;
+        isActive = info.status == ValidatorStatus.ACTIVE;
     }
     
     /**
@@ -459,7 +547,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     }
     
     function setSlashingPercentage(uint256 _percentage) external onlyRole(GOVERNANCE_ROLE) {
-        require(_percentage <= 5000, "Slashing percentage too high"); // Max 50%
+        if (_percentage > 5000) revert SlashingPercentageTooHigh(); // Max 50%
         slashingPercentages = _percentage;
     }
     

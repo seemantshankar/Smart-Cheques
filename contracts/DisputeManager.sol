@@ -376,7 +376,8 @@ contract DisputeManager is
         require(_isArbitratorInPanel(disputeId, msg.sender), "Not in assigned panel");
         require(!disputeVotes[disputeId][msg.sender].hasVoted, "Already voted");
         if (resolutionType == ResolutionType.PartialRelease) {
-            require(amount > 0 && amount <= SmartChequeEscrow(dispute.chequeContract).getMilestone(dispute.milestoneIndex), "Invalid amount");
+            (uint256 milestoneAmount,,,) = SmartChequeEscrow(dispute.chequeContract).getMilestone(dispute.milestoneIndex);
+            require(amount > 0 && amount <= milestoneAmount, "Invalid amount");
         }
         
         // Record the vote

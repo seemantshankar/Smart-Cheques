@@ -1,13 +1,14 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { Contract, Signer } from "ethers";
+import { Contract, Signer, ZeroHash, parseEther, hexlify, randomBytes } from "ethers";
+import { MockERC20, SmartChequeEscrow } from "../typechain-types";
 
 // EIP-712 helpers
 const domain = (contract: Contract, chainId: number) => ({
   name: "SmartChequeEscrow",
   version: "1",
   chainId,
-  verifyingContract: contract.address,
+  verifyingContract: contract.target as string,
 });
 
 const types = {
@@ -33,7 +34,7 @@ async function signAuth(
   deadline: number
 ) {
   const value = {
-    contractAddress: contract.address,
+    contractAddress: contract.target as string,
     chainId,
     escrowId,
     milestoneIndex,
@@ -41,32 +42,28 @@ async function signAuth(
     recipient,
     deadline,
   };
-  // @ts-ignore
-  return await signer._signTypedData(domain(contract, chainId), types, value);
+  return await signer.signTypedData(domain(contract, chainId), types, value);
 }
 
 describe("SmartChequeEscrow - OffChainSigned", function () {
   let buyer: Signer;
   let seller: Signer;
   let other: Signer;
-  let token: Contract;
-  let escrow: Contract;
+  let token: MockERC20;
+  let escrow: SmartChequeEscrow;
   let chainId: number;
 
   beforeEach(async () => {
     [buyer, seller, other] = await ethers.getSigners();
 
-    const TestToken = await ethers.getContractFactory("MockERC20");
-    token = await TestToken.deploy("Test Token", "TEST", ethers.utils.parseEther("1000000"));
-    await token.deployed();
-
-    const Escrow = await ethers.getContractFactory("SmartChequeEscrow");
-    escrow = await upgrades.deployProxy(
-      Escrow,
-      [await buyer.getAddress(), await seller.getAddress(), 1000n, [500n, 500n], [ethers.constants.HashZero, ethers.constants.HashZero]],
+    token = (await ethers.getContractFactory("MockERC20").then(f => f.deploy("Test Token", "TEST", parseEther("1000000")))) as unknown as MockERC20;
+    escrow = (await upgrades.deployProxy(
+      await ethers.getContractFactory("SmartChequeEscrow"),
+      [await buyer.getAddress(), await seller.getAddress(), 1000n, [500n, 500n], [ZeroHash, ZeroHash]],
       { initializer: "initialize" }
-    );
-    await escrow.deployed();
+    )) as unknown as SmartChequeEscrow;
+    await token.waitForDeployment();
+    await escrow.waitForDeployment();
 
     chainId = (await ethers.provider.getNetwork()).chainId;
 
@@ -83,7 +80,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   });
 
   it("completes milestone with valid signature", async () => {
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
     const sig = await signAuth(
       buyer,
@@ -106,7 +103,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   });
 
   it("rejects with expired deadline", async () => {
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const latest = await ethers.provider.getBlock("latest");
     const deadline = (latest?.timestamp || 0) - 1;
     const sig = await signAuth(
@@ -128,7 +125,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   it("rejects when signer mismatch", async () => {
     await escrow.connect(buyer).setSigner(await other.getAddress());
 
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
     const sig = await signAuth(
       buyer,
@@ -147,7 +144,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   });
 
   it("rejects replay of same authorization", async () => {
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
     const sig = await signAuth(
       buyer,
@@ -171,7 +168,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   });
 
   it("rejects wrong recipient", async () => {
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
     const sig = await signAuth(
       buyer,
@@ -192,7 +189,7 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   it("rejects when mode disabled", async () => {
     await escrow.connect(buyer).setAuthorizationMode(0); // None
 
-    const escrowId = ethers.utils.hexlify(ethers.utils.randomBytes(32));
+    const escrowId = hexlify(randomBytes(32));
     const deadline = (await ethers.provider.getBlock("latest")).timestamp + 3600;
     const sig = await signAuth(
       buyer,
