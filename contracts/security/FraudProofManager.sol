@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title FraudProofManager
@@ -72,6 +72,8 @@ contract FraudProofManager is
         bytes32 postStateRoot;
         bytes32[] merkleProof;
         bytes transactionData;
+        bytes32 blockHash;
+        bytes32 transactionRoot;
         uint256 gasUsed;
         bytes executionTrace;
     }
@@ -186,8 +188,28 @@ contract FraudProofManager is
         string reason
     );
 
+    // Custom errors
+    error InvalidBondToken();
+    error InvalidStateRootManager();
+    error InvalidSlashingManager();
+    error InvalidChallengeBond();
+    error InvalidChallengePeriod();
+    error InvalidVerificationPeriod();
+    error InvalidAccusedAddress();
+    error InvalidBlockNumber();
+    error InvalidStateRoot();
+    error InvalidProofData();
+    error BlockAlreadyFinalized();
+    error ChallengePeriodExpired();
+    error TooManyChallengesForBlock();
+    error InvalidChallengeId();
+    error ChallengeNotPending();
+    error VerificationPeriodExpired();
+    error ChallengeNotVerified();
+    error InvalidWinner();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -208,12 +230,12 @@ contract FraudProofManager is
         uint256 _challengePeriod,
         uint256 _verificationPeriod
     ) public initializer {
-        require(_bondToken != address(0), "Invalid bond token");
-        require(_stateRootManager != address(0), "Invalid state root manager");
-        require(_slashingManager != address(0), "Invalid slashing manager");
-        require(_challengeBond > 0, "Invalid challenge bond");
-        require(_challengePeriod > 0, "Invalid challenge period");
-        require(_verificationPeriod > 0, "Invalid verification period");
+        if (_bondToken == address(0)) revert InvalidBondToken();
+        if (_stateRootManager == address(0)) revert InvalidStateRootManager();
+        if (_slashingManager == address(0)) revert InvalidSlashingManager();
+        if (_challengeBond == 0) revert InvalidChallengeBond();
+        if (_challengePeriod == 0) revert InvalidChallengePeriod();
+        if (_verificationPeriod == 0) revert InvalidVerificationPeriod();
 
         __AccessControl_init();
         __Pausable_init();
@@ -255,23 +277,21 @@ contract FraudProofManager is
         bytes calldata proofData,
         string memory description
     ) external onlyRole(CHALLENGER_ROLE) nonReentrant whenNotPaused returns (uint256) {
-        require(accused != address(0), "Invalid accused address");
-        require(blockNumber > 0, "Invalid block number");
-        require(stateRoot != bytes32(0), "Invalid state root");
-        require(proofData.length > 0, "Invalid proof data");
-        require(!finalizedBlocks[blockNumber], "Block already finalized");
+        if (accused == address(0)) revert InvalidAccusedAddress();
+        if (blockNumber == 0) revert InvalidBlockNumber();
+        if (stateRoot == bytes32(0)) revert InvalidStateRoot();
+        if (proofData.length == 0) revert InvalidProofData();
+        if (finalizedBlocks[blockNumber]) revert BlockAlreadyFinalized();
         
         // Check challenge period
-        require(
-            block.timestamp <= blockTimestamps[blockNumber] + challengePeriod,
-            "Challenge period expired"
-        );
+        if (block.timestamp > blockTimestamps[blockNumber] + challengePeriod) {
+            revert ChallengePeriodExpired();
+        }
         
         // Check maximum challenges per block
-        require(
-            blockChallenges[keccak256(abi.encodePacked(blockNumber))] < maxChallengesPerBlock,
-            "Too many challenges for this block"
-        );
+        if (blockChallenges[keccak256(abi.encodePacked(blockNumber))] >= maxChallengesPerBlock) {
+            revert TooManyChallengesForBlock();
+        }
         
         // Transfer challenge bond
         bondToken.safeTransferFrom(msg.sender, address(this), challengeBond);
@@ -323,10 +343,10 @@ contract FraudProofManager is
         bool valid,
         string memory reason
     ) external onlyRole(VERIFIER_ROLE) {
-        require(challengeId < totalChallenges, "Invalid challenge ID");
+        if (challengeId >= totalChallenges) revert InvalidChallengeId();
         FraudProof storage proof = fraudProofs[challengeId];
-        require(proof.status == ChallengeStatus.PENDING, "Challenge not pending");
-        require(block.timestamp <= proof.deadline, "Verification period expired");
+        if (proof.status != ChallengeStatus.PENDING) revert ChallengeNotPending();
+        if (block.timestamp > proof.deadline) revert VerificationPeriodExpired();
         
         if (valid) {
             proof.status = ChallengeStatus.VERIFIED;
@@ -380,10 +400,10 @@ contract FraudProofManager is
         uint256 challengeId,
         address winner
     ) external onlyRole(VERIFIER_ROLE) {
-        require(challengeId < totalChallenges, "Invalid challenge ID");
+        if (challengeId >= totalChallenges) revert InvalidChallengeId();
         FraudProof storage proof = fraudProofs[challengeId];
-        require(proof.status == ChallengeStatus.VERIFIED, "Challenge not verified");
-        require(winner == proof.challenger || winner == proof.accused, "Invalid winner");
+        if (proof.status != ChallengeStatus.VERIFIED) revert ChallengeNotVerified();
+        if (winner != proof.challenger && winner != proof.accused) revert InvalidWinner();
         
         proof.status = ChallengeStatus.RESOLVED;
         
@@ -420,11 +440,11 @@ contract FraudProofManager is
     function verifyStateTransition(
         StateTransitionProof memory proof
     ) public pure returns (bool valid) {
-        // Verify merkle proof for state transition
         bytes32 leaf = keccak256(abi.encodePacked(
             proof.preStateRoot,
             proof.postStateRoot,
-            proof.transactionData,
+            proof.blockHash,
+            proof.transactionRoot,
             proof.gasUsed
         ));
         
@@ -533,7 +553,7 @@ contract FraudProofManager is
             challengeId,
             ChallengeStatus.EXPIRED,
             address(0),
-            0
+            proof.bondAmount
         );
     }
 
@@ -579,6 +599,8 @@ contract FraudProofManager is
                 pendingCount++;
             }
         }
+        
+        return (totalCount, typeCount, pendingCount);
     }
 
     /**

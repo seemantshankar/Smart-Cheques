@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "./SmartChequeEscrow.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {SmartChequeEscrow} from "./SmartChequeEscrow.sol";
 
 /**
  * @title DisputeManager
@@ -146,21 +146,42 @@ contract DisputeManager is
         uint256 averageAmount
     );
 
+    // Custom Errors
+    error InvalidChequeContract();
+    error OnlyParticipantAllowed();
+    error DisputeAlreadyExists();
+    error InvalidDisputeStatus();
+    error NotAssignedArbitrator();
+    error InvalidArbitrator();
+    error OnlyBuyerOrSeller();
+    error NotArbitratorRole();
+    error PanelNotActive();
+    error InvalidPanelConfiguration();
+    error NoPanelAssigned();
+    error NotInAssignedPanel();
+    error AlreadyVoted();
+    error InvalidAmount();
+    error ThresholdTooHigh();
+    error ThresholdMustBePositive();
+    error InvalidArbitratorRole();
+    error InsufficientArbitrators();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
+    // solhint-disable-next-line func-visibility
     constructor() {
         _disableInitializers();
     }
 
-    function initialize() public initializer {
+    function initialize(address _admin, address _arbitrator, address _panelManager) external initializer {
         __AccessControl_init();
         __Pausable_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(ADMIN_ROLE, msg.sender);
-        _grantRole(PANEL_MANAGER_ROLE, msg.sender);
-        _grantRole(ARBITRATOR_ROLE, msg.sender);
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(ADMIN_ROLE, _admin);
+        _grantRole(PANEL_MANAGER_ROLE, _panelManager);
+        _grantRole(ARBITRATOR_ROLE, _arbitrator);
 
         // Set default timeframes
         reviewPeriod = 2 days;
@@ -175,7 +196,7 @@ contract DisputeManager is
     function registerArbitrators(address[] calldata arbitrators) external onlyRole(PANEL_MANAGER_ROLE) {
         for (uint256 i = 0; i < arbitrators.length; i++) {
             address arb = arbitrators[i];
-            require(hasRole(ARBITRATOR_ROLE, arb), "Not arbitrator role");
+            if (!hasRole(ARBITRATOR_ROLE, arb)) revert InvalidArbitratorRole();
             registeredArbitrators.push(arb);
         }
     }
@@ -197,13 +218,10 @@ contract DisputeManager is
         string calldata reason,
         bytes calldata evidence
     ) external whenNotPaused returns (bytes32) {
-        require(chequeContract != address(0), "Invalid cheque contract");
+        if (chequeContract == address(0)) revert InvalidChequeContract();
         
         SmartChequeEscrow cheque = SmartChequeEscrow(chequeContract);
-        require(
-            msg.sender == cheque.buyer() || msg.sender == cheque.seller(),
-            "Only buyer or seller can open dispute"
-        );
+        if (msg.sender != cheque.buyer() && msg.sender != cheque.seller()) revert OnlyParticipantAllowed();
 
         bytes32 disputeId = keccak256(
             abi.encodePacked(
@@ -214,7 +232,7 @@ contract DisputeManager is
             )
         );
 
-        require(disputes[disputeId].status == DisputeStatus.None, "Dispute already exists");
+        if (disputes[disputeId].status != DisputeStatus.None) revert DisputeAlreadyExists();
 
         disputes[disputeId] = Dispute({
             chequeContract: chequeContract,
@@ -241,10 +259,7 @@ contract DisputeManager is
 
     modifier onlyParticipant(address chequeContract) {
         SmartChequeEscrow cheque = SmartChequeEscrow(chequeContract);
-        require(
-            msg.sender == cheque.buyer() || msg.sender == cheque.seller(),
-            "Only buyer or seller"
-        );
+        if (msg.sender != cheque.buyer() && msg.sender != cheque.seller()) revert OnlyBuyerOrSeller();
         _;
     }
 
@@ -260,8 +275,8 @@ contract DisputeManager is
         uint256 amount
     ) external onlyRole(ARBITRATOR_ROLE) whenNotPaused {
         Dispute storage dispute = disputes[disputeId];
-        require(dispute.status == DisputeStatus.UnderReview, "Invalid dispute status");
-        require(dispute.arbitrator == msg.sender, "Not assigned arbitrator");
+        if (dispute.status != DisputeStatus.UnderReview) revert InvalidDisputeStatus();
+        if (dispute.arbitrator != msg.sender) revert NotAssignedArbitrator();
 
         dispute.proposedResolution = resolutionType;
         dispute.proposedAmount = amount;
@@ -278,8 +293,8 @@ contract DisputeManager is
         bytes32 disputeId
     ) external onlyRole(ARBITRATOR_ROLE) whenNotPaused nonReentrant {
         Dispute storage dispute = disputes[disputeId];
-        require(dispute.status == DisputeStatus.ResolutionProposed, "Invalid dispute status");
-        require(dispute.arbitrator == msg.sender, "Not assigned arbitrator");
+        if (dispute.status != DisputeStatus.ResolutionProposed) revert InvalidDisputeStatus();
+        if (dispute.arbitrator != msg.sender) revert NotAssignedArbitrator();
 
         // Update state before external calls (CEI pattern)
         dispute.status = DisputeStatus.Resolved;
@@ -313,8 +328,8 @@ contract DisputeManager is
         address arbitrator
     ) external whenNotPaused nonReentrant onlyParticipant(disputes[disputeId].chequeContract) {
         Dispute storage dispute = disputes[disputeId];
-        require(dispute.status == DisputeStatus.Opened, "Invalid dispute status");
-        require(hasRole(ARBITRATOR_ROLE, arbitrator), "Invalid arbitrator");
+        if (dispute.status != DisputeStatus.Opened) revert InvalidDisputeStatus();
+        if (!hasRole(ARBITRATOR_ROLE, arbitrator)) revert InvalidArbitrator();
 
         dispute.arbitrator = arbitrator;
         dispute.status = DisputeStatus.UnderReview;
@@ -333,7 +348,7 @@ contract DisputeManager is
         bytes32 panelId
     ) external whenNotPaused nonReentrant onlyParticipant(disputes[disputeId].chequeContract) {
         Dispute storage dispute = disputes[disputeId];
-        require(dispute.status == DisputeStatus.Opened, "Invalid dispute status");
+        if (dispute.status != DisputeStatus.Opened) revert InvalidDisputeStatus();
         
         address[] memory panel;
         uint256 threshold;
@@ -344,12 +359,12 @@ contract DisputeManager is
         } else {
             // Use pre-configured panel
             PanelConfig storage config = panelConfigs[panelId];
-            require(config.isActive, "Panel not active");
+            if (!config.isActive) revert InvalidArbitrator();
             panel = config.arbitrators;
             threshold = config.threshold;
         }
         
-        require(panel.length >= threshold, "Invalid panel configuration");
+        if (panel.length < threshold) revert InvalidArbitrator();
         
         dispute.arbitratorPanel = panel;
         dispute.requiredVotes = threshold;
@@ -371,13 +386,13 @@ contract DisputeManager is
         uint256 amount
     ) external onlyRole(ARBITRATOR_ROLE) whenNotPaused {
         Dispute storage dispute = disputes[disputeId];
-        require(dispute.status == DisputeStatus.UnderReview, "Invalid dispute status");
-        require(dispute.arbitratorPanel.length > 0, "No panel assigned");
-        require(_isArbitratorInPanel(disputeId, msg.sender), "Not in assigned panel");
-        require(!disputeVotes[disputeId][msg.sender].hasVoted, "Already voted");
+        if (dispute.status != DisputeStatus.UnderReview) revert InvalidDisputeStatus();
+        if (dispute.arbitratorPanel.length == 0) revert NoPanelAssigned();
+        if (!_isArbitratorInPanel(disputeId, msg.sender)) revert NotInAssignedPanel();
+        if (disputeVotes[disputeId][msg.sender].hasVoted) revert AlreadyVoted();
         if (resolutionType == ResolutionType.PartialRelease) {
             (uint256 milestoneAmount,,,) = SmartChequeEscrow(dispute.chequeContract).getMilestone(dispute.milestoneIndex);
-            require(amount > 0 && amount <= milestoneAmount, "Invalid amount");
+            if (amount == 0 || amount > milestoneAmount) revert InvalidAmount();
         }
         
         // Record the vote
@@ -410,12 +425,12 @@ contract DisputeManager is
         address[] calldata arbitrators,
         uint256 threshold
     ) external onlyRole(PANEL_MANAGER_ROLE) {
-        require(arbitrators.length >= threshold, "Threshold too high");
-        require(threshold > 0, "Threshold must be positive");
+        if (arbitrators.length < threshold) revert ThresholdTooHigh();
+        if (threshold == 0) revert ThresholdMustBePositive();
         
         // Verify all addresses have ARBITRATOR_ROLE
         for (uint256 i = 0; i < arbitrators.length; i++) {
-            require(hasRole(ARBITRATOR_ROLE, arbitrators[i]), "Invalid arbitrator");
+            if (!hasRole(ARBITRATOR_ROLE, arbitrators[i])) revert InvalidArbitratorRole();
         }
         
         PanelConfig storage config = panelConfigs[panelId];
@@ -458,8 +473,8 @@ contract DisputeManager is
         uint256 newPanelSize,
         uint256 newThreshold
     ) external onlyRole(ADMIN_ROLE) {
-        require(newPanelSize >= newThreshold, "Threshold too high");
-        require(newThreshold > 0, "Threshold must be positive");
+        if (newPanelSize < newThreshold) revert ThresholdTooHigh();
+        if (newThreshold == 0) revert ThresholdMustBePositive();
         
         defaultPanelSize = newPanelSize;
         defaultThreshold = newThreshold;
@@ -653,7 +668,7 @@ contract DisputeManager is
      */
     function _selectRandomPanel() internal view returns (address[] memory, uint256) {
         uint256 n = registeredArbitrators.length;
-        require(n >= defaultPanelSize, "Insufficient arbitrators");
+        if (n < defaultPanelSize) revert InsufficientArbitrators();
         address[] memory panel = new address[](defaultPanelSize);
         uint256 seed = uint256(keccak256(abi.encodePacked(block.prevrandao, block.timestamp, n)));
         for (uint256 i = 0; i < defaultPanelSize; i++) {
@@ -720,5 +735,7 @@ contract DisputeManager is
     /**
      * @dev Function that should revert when msg.sender is not authorized to upgrade the contract
      */
-    function _authorizeUpgrade(address) internal override onlyRole(ADMIN_ROLE) {}
+    function _authorizeUpgrade(address) internal override onlyRole(ADMIN_ROLE) {
+        // UUPS upgrade authorization - only ADMIN_ROLE can upgrade
+    }
 }

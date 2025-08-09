@@ -8,12 +8,27 @@ export default [
   ...tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],
-    languageOptions: { parserOptions: { ecmaVersion: 2023, sourceType: "module" } },
+    languageOptions: { 
+      parserOptions: { 
+        project: "./tsconfig.json",
+        ecmaVersion: 2023, 
+        sourceType: "module" 
+      },
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        console: "readonly",
+        fetch: "readonly",
+        atob: "readonly",
+        btoa: "readonly"
+      }
+    },
     plugins: { "react-refresh": reactRefresh },
     rules: {
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }]
+      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      "no-undef": "off"
     }
   }
 ];

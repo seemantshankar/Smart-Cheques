@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title SlashingManager
@@ -96,9 +96,14 @@ contract SlashingManager is
     mapping(bytes32 => SlashingEvidence) public evidenceRecords;
     
     // Slashing records
-    mapping(address => SlashingRecord[]) public validatorSlashings;
     mapping(uint256 => SlashingRecord) public slashingRecords;
+    mapping(address => SlashingRecord[]) public validatorSlashings;
+    
+    // Statistics
     uint256 public totalSlashingRecords;
+    uint256 public totalSlashedAmount;
+    mapping(SlashingType => uint256) public slashingCounts;
+    mapping(address => uint256) public validatorSlashingCounts;
     
     // Jail information
     mapping(address => JailInfo) public jailInfo;
@@ -107,16 +112,11 @@ contract SlashingManager is
     mapping(address => mapping(uint256 => bool)) public appeals;
     mapping(address => uint256) public appealCounts;
     
-    // Slashing statistics
-    mapping(SlashingType => uint256) public slashingCounts;
-    mapping(address => uint256) public validatorSlashingCounts;
-    uint256 public totalSlashedAmount;
-    
     // Configuration parameters
-    uint256 public maxSlashingPercentage;   // Maximum percentage that can be slashed
-    uint256 public appealWindow;            // Time window for appeals
-    uint256 public evidenceSubmissionWindow; // Time window for evidence submission
-    uint256 public minStakeForSlashing;     // Minimum stake required for slashing
+    uint256 public maxSlashingPercentage;
+    uint256 public appealWindow;
+    uint256 public evidenceSubmissionWindow;
+    uint256 public minStakeForSlashing;
     
     // Events
     event ValidatorSlashed(
@@ -164,8 +164,34 @@ contract SlashingManager is
         SlashingSeverity severity
     );
 
+    // Custom errors
+    error InvalidStakingToken();
+    error InvalidValidatorManager();
+    error InvalidTreasury();
+    error InvalidValidatorAddress();
+    error InvalidSlashingType();
+    error InvalidPenaltyPercentage();
+    error InvalidJailDuration();
+    error InvalidEvidenceHash();
+    error InvalidEvidenceData();
+    error EvidenceAlreadySubmitted();
+    error EvidenceNotVerified();
+    error ValidatorAlreadyJailed();
+    error ValidatorNotJailed();
+    error JailPeriodNotExpired();
+    error InsufficientStake();
+    error AppealPeriodExpired();
+    error AppealAlreadySubmitted();
+    error SlashingConfigNotFound();
+    error InvalidRecordId();
+    error NotYourSlashingRecord();
+    error AlreadyAppealed();
+    error AlreadyResolved();
+    error PenaltyTooHigh();
+    error InvalidImplementation();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -180,9 +206,9 @@ contract SlashingManager is
         address _validatorManager,
         address _treasury
     ) public initializer {
-        require(_stakingToken != address(0), "Invalid staking token");
-        require(_validatorManager != address(0), "Invalid validator manager");
-        require(_treasury != address(0), "Invalid treasury");
+        if (_stakingToken == address(0)) revert InvalidStakingToken();
+        if (_validatorManager == address(0)) revert InvalidValidatorManager();
+        if (_treasury == address(0)) revert InvalidTreasury();
 
         __AccessControl_init();
         __Pausable_init();
@@ -283,11 +309,11 @@ contract SlashingManager is
         bytes32 evidenceHash,
         string memory ipfsHash
     ) external onlyRole(EVIDENCE_SUBMITTER_ROLE) returns (bytes32) {
-        require(validator != address(0), "Invalid validator");
-        require(evidenceHash != bytes32(0), "Invalid evidence hash");
+        if (validator == address(0)) revert InvalidValidatorAddress();
+        if (evidenceHash == bytes32(0)) revert InvalidEvidenceHash();
         
         SlashingConfig memory config = slashingConfigs[slashingType];
-        require(config.requiresEvidence, "Evidence not required for this violation");
+        if (!config.requiresEvidence) revert InvalidSlashingType();
         
         bytes32 evidenceId = keccak256(abi.encodePacked(
             validator,
@@ -318,8 +344,8 @@ contract SlashingManager is
         bytes32 evidenceId,
         bool verified
     ) external onlyRole(ADMIN_ROLE) {
-        require(evidenceRecords[evidenceId].submitter != address(0), "Evidence not found");
-        require(!evidenceRecords[evidenceId].verified, "Evidence already verified");
+        if (evidenceRecords[evidenceId].submitter == address(0)) revert InvalidEvidenceData();
+        if (evidenceRecords[evidenceId].verified) revert EvidenceAlreadySubmitted();
         
         evidenceRecords[evidenceId].verified = verified;
         emit EvidenceVerified(evidenceId, msg.sender, verified);
@@ -338,30 +364,31 @@ contract SlashingManager is
         bytes32 evidenceId,
         uint256 customAmount
     ) external onlyRole(SLASHER_ROLE) nonReentrant whenNotPaused {
-        require(validator != address(0), "Invalid validator");
+        if (validator == address(0)) revert InvalidValidatorAddress();
         
         SlashingConfig memory config = slashingConfigs[slashingType];
         
         // Check evidence requirements
         if (config.requiresEvidence) {
-            require(evidenceId != bytes32(0), "Evidence required");
+            if (evidenceId == bytes32(0)) revert InvalidEvidenceHash();
             SlashingEvidence memory evidence = evidenceRecords[evidenceId];
-            require(evidence.submitter != address(0), "Evidence not found");
-            require(evidence.verified, "Evidence not verified");
-            require(
-                block.timestamp <= evidence.timestamp + config.evidenceTimeout,
-                "Evidence submission timeout"
-            );
+            if (evidence.submitter == address(0)) revert InvalidEvidenceData();
+            if (!evidence.verified) revert EvidenceNotVerified();
+            if (block.timestamp > evidence.timestamp + config.evidenceTimeout) {
+                revert InvalidEvidenceData();
+            }
         }
         
         // Get validator stake (this would interface with validator manager)
         uint256 validatorStake = _getValidatorStake(validator);
-        require(validatorStake >= minStakeForSlashing, "Insufficient stake for slashing");
+        if (validatorStake < minStakeForSlashing) revert InsufficientStake();
         
         // Calculate slashing amount
         uint256 slashingAmount;
         if (customAmount > 0) {
-            require(customAmount <= (validatorStake * maxSlashingPercentage) / 10000, "Slashing amount too high");
+            if (customAmount > (validatorStake * maxSlashingPercentage) / 10000) {
+                revert InvalidPenaltyPercentage();
+            }
             slashingAmount = customAmount;
         } else {
             slashingAmount = (validatorStake * config.penaltyPercentage) / 10000;
@@ -413,6 +440,11 @@ contract SlashingManager is
         slashingRecords[recordId] = record;
         validatorSlashings[validator].push(record);
         
+        // Update statistics
+        totalSlashedAmount += amount;
+        slashingCounts[slashingType]++;
+        validatorSlashingCounts[validator]++;
+        
         emit ValidatorSlashed(validator, slashingType, amount, evidenceId);
     }
 
@@ -445,9 +477,9 @@ contract SlashingManager is
      * @param validator Validator to unjail
      */
     function unjailValidator(address validator) external {
-        require(validator != address(0), "Invalid validator");
-        require(jailInfo[validator].isJailed, "Validator not jailed");
-        require(block.timestamp >= jailInfo[validator].releaseTime, "Jail period not expired");
+        if (validator == address(0)) revert InvalidValidatorAddress();
+        if (!jailInfo[validator].isJailed) revert ValidatorNotJailed();
+        if (block.timestamp < jailInfo[validator].releaseTime) revert JailPeriodNotExpired();
         
         jailInfo[validator].isJailed = false;
         emit ValidatorUnjailed(validator, block.timestamp);
@@ -458,15 +490,12 @@ contract SlashingManager is
      * @param recordId Slashing record ID
      */
     function appealSlashing(uint256 recordId) external {
-        require(recordId < totalSlashingRecords, "Invalid record ID");
+        if (recordId >= totalSlashingRecords) revert InvalidRecordId();
         SlashingRecord storage record = slashingRecords[recordId];
-        require(record.validator == msg.sender, "Not your slashing record");
-        require(!record.appealed, "Already appealed");
-        require(!record.resolved, "Already resolved");
-        require(
-            block.timestamp <= record.timestamp + appealWindow,
-            "Appeal window expired"
-        );
+        if (record.validator != msg.sender) revert NotYourSlashingRecord();
+        if (record.appealed) revert AlreadyAppealed();
+        if (record.resolved) revert AlreadyResolved();
+        if (block.timestamp > record.timestamp + appealWindow) revert AppealPeriodExpired();
         
         record.appealed = true;
         appeals[msg.sender][recordId] = true;
@@ -492,7 +521,7 @@ contract SlashingManager is
         uint256 evidenceTimeout,
         SlashingSeverity severity
     ) external onlyRole(ADMIN_ROLE) {
-        require(penaltyPercentage <= maxSlashingPercentage, "Penalty too high");
+        if (penaltyPercentage > maxSlashingPercentage) revert PenaltyTooHigh();
         
         slashingConfigs[slashingType] = SlashingConfig({
             penaltyPercentage: penaltyPercentage,
@@ -518,6 +547,7 @@ contract SlashingManager is
     function _getValidatorStake(address validator) internal view returns (uint256) {
         // This is a placeholder - in practice, this would call the validator manager
         // to get the actual stake amount
+        validator; // Silence unused parameter warning
         return 10000e18; // Placeholder value
     }
 
@@ -540,22 +570,34 @@ contract SlashingManager is
     }
 
     /**
-     * @dev Get slashing statistics
-     * @return totalRecords Total number of slashing records
-     * @return totalAmount Total amount slashed
-     * @return typeCount Array of counts per slashing type
+     * @dev Get slashing statistics for a specific validator
+     * @param validatorAddress Address of the validator
+     * @return totalSlashings Total number of slashings for this validator
+     * @return totalPenalty Total amount slashed for this validator
+     * @return currentJailEndTime Timestamp when jail period ends (if jailed)
+     * @return isCurrentlyJailed Whether the validator is currently jailed
+     * @return appealCount Number of appeals submitted by this validator
      */
-    function getSlashingStatistics() external view returns (
-        uint256 totalRecords,
-        uint256 totalAmount,
-        uint256[6] memory typeCount
+    function getSlashingStatistics(address validatorAddress) external view returns (
+        uint256 totalSlashings,
+        uint256 totalPenalty,
+        uint256 currentJailEndTime,
+        bool isCurrentlyJailed,
+        uint256 appealCount
     ) {
-        totalRecords = totalSlashingRecords;
-        totalAmount = totalSlashedAmount;
+        totalSlashings = validatorSlashingCounts[validatorAddress];
         
-        for (uint256 i = 0; i < 6; i++) {
-            typeCount[i] = slashingCounts[SlashingType(i)];
+        // Calculate total penalty for this validator
+        SlashingRecord[] storage records = validatorSlashings[validatorAddress];
+        totalPenalty = 0;
+        for (uint256 i = 0; i < records.length; i++) {
+            totalPenalty += records[i].amount;
         }
+        
+        JailInfo storage jail = jailInfo[validatorAddress];
+        currentJailEndTime = jail.releaseTime;
+        isCurrentlyJailed = jail.isJailed && block.timestamp < jail.releaseTime;
+        appealCount = appealCounts[validatorAddress];
     }
 
     /**
@@ -576,5 +618,7 @@ contract SlashingManager is
      * @dev Authorize contract upgrade
      * @param newImplementation New implementation address
      */
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
+        // Authorization handled by onlyRole modifier
+    }
 }

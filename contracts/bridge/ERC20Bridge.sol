@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -23,25 +23,17 @@ contract ERC20Bridge is
 {
     using SafeERC20 for IERC20;
 
-    // Custom errors
+    // Custom Errors (consolidated, duplicates and unused removed)
     error InvalidRecipient();
-    error DepositAlreadyProcessed();
-    error WithdrawalAlreadyProcessed();
-    error InvalidMerkleProof();
-    error InsufficientValidatorSignatures();
-    error InvalidSignature();
-    error InvalidChallenge();
+    error AlreadyProcessed();
+    error InvalidProof();
+    error InsufficientValidatorQuorum();
+    error InvalidValidator();
     error UnauthorizedAccess();
-    error InvalidDepositId();
-    error InvalidWithdrawalId();
-    error TokenNotSupported();
-    error AmountBelowMinimum();
-    error AmountAboveMaximum();
-    error InvalidBlockNumber();
-    error InvalidTimestamp();
     error InvalidAmount();
     error InvalidToken();
     error ChallengeStillActive();
+    error AmountBelowMinimum();
 
     // Roles
     bytes32 public constant RELAYER_ROLE = keccak256("RELAYER_ROLE");
@@ -93,7 +85,7 @@ contract ERC20Bridge is
     mapping(address => bool) public supportedTokens;
     mapping(address => uint256) public validatorStakes;
     mapping(bytes32 => mapping(address => bool)) public validatorVotes;
-    mapping(bytes32 => uint256) public validatorVoteCount;
+
     
     address[] public validators;
     uint256 public totalValidatorStake;
@@ -146,25 +138,20 @@ contract ERC20Bridge is
         address indexed challenger
     );
 
-    // Custom errors
-    error InvalidProof();
-    error AlreadyProcessed();
-    error InsufficientValidatorQuorum();
-    error InvalidValidator();
-    error InsufficientStake();
+
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
     /**
      * @dev Initialize the bridge contract
-     * @param _admin Admin address
+     * @param admin Admin address
      * @param _minValidatorStake Minimum stake required for validators
      */
     function initialize(
-        address _admin,
+        address admin,
         uint256 _minValidatorStake
     ) public initializer {
         __UUPSUpgradeable_init();
@@ -172,10 +159,10 @@ contract ERC20Bridge is
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(ADMIN_ROLE, _admin);
-        _grantRole(PAUSER_ROLE, _admin);
-        _grantRole(UPGRADER_ROLE, _admin);
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(ADMIN_ROLE, admin);
+        _grantRole(PAUSER_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, admin);
         
         minValidatorStake = _minValidatorStake;
         depositNonce = 1;
@@ -234,7 +221,7 @@ contract ERC20Bridge is
     }
 
     /**
-     * @dev Withdraw tokens from L2 with Merkle proof
+     * @notice Withdraw tokens from L2 with Merkle proof
      * @param withdrawalId Unique withdrawal identifier
      * @param token L1 token address
      * @param recipient Recipient address
@@ -256,11 +243,33 @@ contract ERC20Bridge is
     ) external nonReentrant whenNotPaused {
         if (processedExits[withdrawalId]) revert AlreadyProcessed();
         if (!supportedTokens[token]) revert InvalidToken();
-
-        // Verify validator signatures and quorum
+    
         _verifyValidatorQuorum(withdrawalId, validatorSignatures);
-
-        // Verify Merkle proof
+        _verifyMerkleProof(withdrawalId, token, recipient, amount, l2BlockNumber, l2TxHash, merkleProof);
+        _storeWithdrawalData(withdrawalId, token, recipient, amount, l2BlockNumber, l2TxHash);
+    
+        emit TokenWithdrawn(
+            withdrawalId,
+            token,
+            recipient,
+            amount,
+            l2TxHash
+        );
+    }
+    
+    /**
+     * @dev Internal function to verify Merkle proof
+     * @param withdrawalId Withdrawal identifier
+     */
+    function _verifyMerkleProof(
+        bytes32 withdrawalId,
+        address token,
+        address recipient,
+        uint256 amount,
+        uint256 l2BlockNumber,
+        bytes32 l2TxHash,
+        bytes32[] calldata merkleProof
+    ) internal view {
         bytes32 leaf = keccak256(
             abi.encodePacked(
                 withdrawalId,
@@ -275,8 +284,20 @@ contract ERC20Bridge is
         if (!MerkleProof.verify(merkleProof, currentMerkleRoot, leaf)) {
             revert InvalidProof();
         }
-
-        // Store withdrawal data with challenge period
+    }
+    
+    /**
+     * @dev Internal function to store withdrawal data
+     * @param withdrawalId Withdrawal identifier
+     */
+    function _storeWithdrawalData(
+        bytes32 withdrawalId,
+        address token,
+        address recipient,
+        uint256 amount,
+        uint256 l2BlockNumber,
+        bytes32 l2TxHash
+    ) internal {
         withdrawals[withdrawalId] = WithdrawalData({
             token: token,
             recipient: recipient,
@@ -287,14 +308,6 @@ contract ERC20Bridge is
             processed: false,
             challengeDeadline: block.timestamp + CHALLENGE_PERIOD
         });
-
-        emit TokenWithdrawn(
-            withdrawalId,
-            token,
-            recipient,
-            amount,
-            l2TxHash
-        );
     }
 
     /**
@@ -425,10 +438,10 @@ contract ERC20Bridge is
 
     /**
      * @dev Update the minimum validator stake
-     * @param _minValidatorStake New minimum stake amount
+     * @param newMinValidatorStake New minimum stake amount
      */
-    function updateMinValidatorStake(uint256 _minValidatorStake) external onlyRole(UPGRADER_ROLE) {
-        minValidatorStake = _minValidatorStake;
+    function updateMinValidatorStake(uint256 newMinValidatorStake) external onlyRole(UPGRADER_ROLE) {
+        minValidatorStake = newMinValidatorStake;
     }
 
     /**
@@ -495,7 +508,8 @@ contract ERC20Bridge is
     /**
      * @dev Batch grant roles for initial setup
      * @param relayers Array of relayer addresses
-     * @param validatorsData Array of validator addresses and stakes
+     * @param validatorsData Array of validator addresses
+     * @param stakes Array of stakes for validators
      */
     function batchSetupRoles(
         address[] calldata relayers,
@@ -530,7 +544,9 @@ contract ERC20Bridge is
      */
     function _authorizeUpgrade(
         address newImplementation
-    ) internal override onlyRole(UPGRADER_ROLE) {}
+    ) internal override onlyRole(UPGRADER_ROLE) {
+        if (newImplementation == address(0)) revert InvalidRecipient();
+    }
 
     /**
      * @dev Get validator count

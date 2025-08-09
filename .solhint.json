@@ -1,10 +1,14 @@
 {
   "extends": "solhint:recommended",
   "rules": {
-    "compiler-version": ["error", "^0.8.19"],
     "no-global-import": "error",
-    "func-visibility": ["error", {"ignoreConstructors": true}],
-    "reason-string": ["warn", {"maxLength": 64}],
-    "custom-errors": "warn"
+    "custom-errors": "warn",
+    "no-empty-blocks": "warn",
+    "max-states-count": ["warn", 15],
+    "immutable-vars-naming": ["warn", {"immutablesStyle": "SNAKE_CASE"}],
+    "var-name-mixedcase": "warn",
+    "avoid-low-level-calls": "warn",
+    "one-contract-per-file": "error",
+    "compiler-version": ["error", "^0.8.24"]
   }
 }

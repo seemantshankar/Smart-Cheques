@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title StateRootManager
@@ -79,6 +79,26 @@ contract StateRootManager is
     /// @dev Mapping to track challenger bonds
     mapping(address => uint256) public challengerBonds;
 
+    // Custom errors
+    error InvalidStateRoot();
+    error InvalidBlockNumber();
+    error InvalidTransactionCount();
+    error InsufficientBond();
+    error InvalidParentRoot();
+    error ParentRootNotFinalized();
+    error StateRootAlreadyExists();
+    error StateRootDoesNotExist();
+    error AlreadyChallenged();
+    error AlreadyFinalized();
+    error ChallengePeriodExpired();
+    error InvalidFraudProof();
+    error ChallengeAlreadyResolved();
+    error InvalidChallenge();
+    error ChallengePeriodNotExpired();
+    error UnresolvedChallenges();
+    error TransferFailed();
+    error EmergencyWithdrawalFailed();
+
     // Events
     event StateRootSubmitted(
         bytes32 indexed stateRoot,
@@ -113,7 +133,7 @@ contract StateRootManager is
     event BondSlashed(address indexed account, uint256 amount, string reason);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -144,19 +164,19 @@ contract StateRootManager is
         bytes32 parentRoot,
         uint256 transactionCount
     ) external payable onlyRole(SEQUENCER_ROLE) whenNotPaused nonReentrant {
-        require(stateRoot != bytes32(0), "Invalid state root");
-        require(blockNumber > 0, "Invalid block number");
-        require(transactionCount > 0, "Invalid transaction count");
-        require(msg.value >= SEQUENCER_BOND, "Insufficient bond");
+        if (stateRoot == bytes32(0)) revert InvalidStateRoot();
+        if (blockNumber == 0) revert InvalidBlockNumber();
+        if (transactionCount == 0) revert InvalidTransactionCount();
+        if (msg.value < SEQUENCER_BOND) revert InsufficientBond();
         
         // Verify parent root exists (except for genesis)
         if (blockNumber > 1) {
-            require(stateRoots[parentRoot].root != bytes32(0), "Invalid parent root");
-            require(stateRoots[parentRoot].finalized, "Parent root not finalized");
+            if (stateRoots[parentRoot].root == bytes32(0)) revert InvalidParentRoot();
+            if (!stateRoots[parentRoot].finalized) revert ParentRootNotFinalized();
         }
 
         // Ensure state root doesn't already exist
-        require(stateRoots[stateRoot].root == bytes32(0), "State root already exists");
+        if (stateRoots[stateRoot].root != bytes32(0)) revert StateRootAlreadyExists();
 
         uint256 challengeDeadline = block.timestamp + CHALLENGE_PERIOD;
 
@@ -199,12 +219,12 @@ contract StateRootManager is
         bytes32 stateRoot,
         bytes calldata fraudProof
     ) external payable whenNotPaused nonReentrant {
-        require(msg.value >= CHALLENGER_BOND, "Insufficient challenger bond");
-        require(stateRoots[stateRoot].root != bytes32(0), "State root does not exist");
-        require(!stateRoots[stateRoot].challenged, "Already challenged");
-        require(!stateRoots[stateRoot].finalized, "Already finalized");
-        require(block.timestamp <= stateRoots[stateRoot].challengeDeadline, "Challenge period expired");
-        require(fraudProof.length > 0, "Invalid fraud proof");
+        if (msg.value < CHALLENGER_BOND) revert InsufficientBond();
+        if (stateRoots[stateRoot].root == bytes32(0)) revert StateRootDoesNotExist();
+        if (stateRoots[stateRoot].challenged) revert AlreadyChallenged();
+        if (stateRoots[stateRoot].finalized) revert AlreadyFinalized();
+        if (block.timestamp > stateRoots[stateRoot].challengeDeadline) revert ChallengePeriodExpired();
+        if (fraudProof.length == 0) revert InvalidFraudProof();
 
         uint256 challengeId = challengeCounter++;
         
@@ -229,13 +249,13 @@ contract StateRootManager is
      * @dev Finalize a state root after challenge period
      * @param stateRoot The state root to finalize
      */
-    function finalizeStateRoot(bytes32 stateRoot) external whenNotPaused {
+    function finalizeStateRoot(bytes32 stateRoot) external whenNotPaused nonReentrant {
         StateRoot storage root = stateRoots[stateRoot];
         
-        require(root.root != bytes32(0), "State root does not exist");
-        require(!root.finalized, "Already finalized");
-        require(!root.challenged || _allChallengesResolved(stateRoot), "Unresolved challenges");
-        require(block.timestamp > root.challengeDeadline, "Challenge period not expired");
+        if (root.root == bytes32(0)) revert StateRootDoesNotExist();
+        if (root.finalized) revert AlreadyFinalized();
+        if (root.challenged && !_allChallengesResolved(stateRoot)) revert UnresolvedChallenges();
+        if (block.timestamp <= root.challengeDeadline) revert ChallengePeriodNotExpired();
 
         root.finalized = true;
         latestFinalizedRoot = stateRoot;
@@ -246,7 +266,7 @@ contract StateRootManager is
         sequencerBonds[proposer] -= bondAmount;
         
         (bool success, ) = proposer.call{value: bondAmount}("");
-        require(success, "Bond transfer failed");
+        if (!success) revert TransferFailed();
 
         emit StateRootFinalized(stateRoot, root.blockNumber, block.timestamp);
         emit BondWithdrawn(proposer, bondAmount, "sequencer");
@@ -260,19 +280,18 @@ contract StateRootManager is
     function resolveChallenge(
         uint256 challengeId,
         bool successful
-    ) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    ) external onlyRole(ADMIN_ROLE) whenNotPaused nonReentrant {
         Challenge storage challenge = challenges[challengeId];
         
-        require(!challenge.resolved, "Challenge already resolved");
-        require(challenge.challenger != address(0), "Invalid challenge");
+        if (challenge.resolved) revert ChallengeAlreadyResolved();
+        if (challenge.challenger == address(0)) revert InvalidChallenge();
 
         challenge.resolved = true;
         challenge.successful = successful;
 
-        bytes32 stateRoot = challenge.stateRoot;
         address challenger = challenge.challenger;
         uint256 challengerBond = challenge.bond;
-        address proposer = stateRoots[stateRoot].proposer;
+        address proposer = stateRoots[challenge.stateRoot].proposer;
 
         if (successful) {
             // Challenge successful - slash sequencer, reward challenger
@@ -283,7 +302,7 @@ contract StateRootManager is
             // Transfer bonds to challenger
             uint256 totalReward = sequencerBond + challengerBond;
             (bool success, ) = challenger.call{value: totalReward}("");
-            require(success, "Reward transfer failed");
+            if (!success) revert TransferFailed();
             
             emit BondSlashed(proposer, sequencerBond, "successful challenge");
             emit BondWithdrawn(challenger, totalReward, "challenge reward");
@@ -294,13 +313,13 @@ contract StateRootManager is
             
             // Return sequencer bond, forfeit challenger bond
             (bool success, ) = proposer.call{value: SEQUENCER_BOND}("");
-            require(success, "Bond return failed");
+            if (!success) revert TransferFailed();
             
             emit BondSlashed(challenger, challengerBond, "unsuccessful challenge");
             emit BondWithdrawn(proposer, SEQUENCER_BOND, "sequencer");
         }
 
-        emit ChallengeResolved(challengeId, stateRoot, successful, challenger);
+        emit ChallengeResolved(challengeId, challenge.stateRoot, successful, challenger);
     }
 
     /**
@@ -331,10 +350,9 @@ contract StateRootManager is
 
     /**
      * @dev Check if all challenges for a state root are resolved
-     * @param stateRoot The state root to check
      * @return True if all challenges are resolved
      */
-    function _allChallengesResolved(bytes32 stateRoot) internal view returns (bool) {
+    function _allChallengesResolved(bytes32 /* stateRoot */) internal view returns (bool) {
         // This is a simplified implementation
         // In practice, you'd track challenges per state root
         return true;
@@ -358,7 +376,9 @@ contract StateRootManager is
      * @dev Authorize contract upgrades
      * @param newImplementation Address of the new implementation
      */
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+    // solhint-disable-next-line no-empty-blocks
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
+    }
 
     /**
      * @dev Emergency withdrawal function (admin only)
@@ -366,12 +386,13 @@ contract StateRootManager is
     function emergencyWithdraw() external onlyRole(ADMIN_ROLE) {
         uint256 balance = address(this).balance;
         (bool success, ) = msg.sender.call{value: balance}("");
-        require(success, "Emergency withdrawal failed");
+        if (!success) revert EmergencyWithdrawalFailed();
     }
 
     /**
      * @dev Receive function to accept ETH deposits
      */
+    // solhint-disable-next-line no-empty-blocks
     receive() external payable {
         // Allow contract to receive ETH for bonds
     }

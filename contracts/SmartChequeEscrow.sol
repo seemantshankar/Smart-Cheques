@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
@@ -8,19 +8,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/se
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {ECDSAUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-
-// Minimal interface for registry
-interface IObligationRegistry {
-    function verifyObligation(bytes32 obligationId) external returns (bool);
-    function getObligation(bytes32 obligationId) external view returns (
-        bytes32 hash,
-        address oracleAddress,
-        bytes4 oracleFunction,
-        bytes memory parameters,
-        bool isVerified,
-        uint256 verificationTimestamp
-    );
-}
+import {IObligationRegistry} from "./interfaces/IObligationRegistry.sol";
 
 /**
  * @title SmartChequeEscrow
@@ -46,6 +34,7 @@ contract SmartChequeEscrow is
     error InvalidRecipient();
     error InvalidSignature();
     error AuthorizationAlreadyUsed();
+    error VerificationInProgress();
     error NoDisputeRaised();
     error AmountExceedsMilestone();
     error FundsAlreadyLocked();
@@ -86,6 +75,10 @@ contract SmartChequeEscrow is
 
     // Replay protection mapping: cheque/escrow id + milestone index => consumed
     mapping(bytes32 => bool) public consumedAuthorizations;
+    
+    // Replay / verification protection
+    mapping(uint256 => bool) private _verifyingMilestone;
+
 
     event FundsLocked(address indexed buyer, uint256 amount);
     event MilestoneCompleted(uint256 indexed milestoneIndex, uint256 amount);
@@ -116,7 +109,7 @@ contract SmartChequeEscrow is
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -221,21 +214,29 @@ contract SmartChequeEscrow is
 
 
 
-    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal nonReentrant returns (bool) {
+    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal returns (bool) {
+        if (_verifyingMilestone[milestoneIndex]) revert VerificationInProgress();
+        
+        _verifyingMilestone[milestoneIndex] = true;
+
         bytes32 obligationId = milestones[milestoneIndex].obligationHash;
-        bool success = true;
-        if (obligationRegistry != address(0)) {
-            IObligationRegistry reg = IObligationRegistry(obligationRegistry);
-            // If already verified, skip call; else attempt verification
-            (, , , , bool isVerified, ) = reg.getObligation(obligationId);
-            if (!isVerified) {
-                success = reg.verifyObligation(obligationId);
-            } else {
-                success = true;
-            }
-        }
+        bool success = _safeVerifyObligation(obligationId);
+        
         emit MilestoneVerification(milestoneIndex, obligationId, success, keccak256(proof));
+        
+        _verifyingMilestone[milestoneIndex] = false;
         return success;
+    }
+
+    function _safeVerifyObligation(bytes32 obligationId) internal returns (bool) {
+        if (obligationRegistry == address(0)) return true;
+        
+        IObligationRegistry reg = IObligationRegistry(obligationRegistry);
+        (, , , , bool isVerified, ) = reg.getObligation(obligationId);
+        
+        if (isVerified) return true;
+        
+        return reg.verifyObligation(obligationId);
     }
 
     /**

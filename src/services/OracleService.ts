@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import axios from 'axios';
 import { db } from '../db';
+import winston from 'winston';
 
 interface OracleConfig {
   type: 'band' | 'chainlink';
@@ -13,6 +14,7 @@ export class OracleService {
   private wallet: ethers.Wallet;
   private obligationRegistry: ethers.Contract;
   private oracles: Map<string, OracleConfig>;
+  private logger: winston.Logger;
 
   constructor(rpcUrl: string, privateKey: string) {
     this.provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -25,6 +27,13 @@ export class OracleService {
       ],
       this.wallet
     );
+    
+    // Initialize logger
+    this.logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      transports: [new winston.transports.Console()],
+      format: winston.format.json()
+    });
 
     // Initialize oracle configurations
     this.oracles = new Map([
@@ -47,7 +56,7 @@ export class OracleService {
       const oracleDataList = await db.getOracleDataByHash(obligationId);
       
       if (oracleDataList.length === 0) {
-        console.error(`No oracle data found for obligation ${obligationId}`);
+        this.logger.error(`No oracle data found for obligation ${obligationId}`);
         return false;
       }
 
@@ -60,7 +69,7 @@ export class OracleService {
       const validResponses = responses.filter(r => r !== null);
       
       if (validResponses.length === 0) {
-        console.error(`No valid oracle responses for obligation ${obligationId}`);
+        this.logger.error(`No valid oracle responses for obligation ${obligationId}`);
         return false;
       }
 
@@ -84,13 +93,13 @@ export class OracleService {
       // Optionally trigger on-chain verification
       try {
         await this.obligationRegistry.verifyObligation(obligationId);
-      } catch (e) {
+      } catch {
         // ignore failures to avoid blocking
       }
 
       return isVerified;
     } catch (error) {
-      console.error(`Error verifying obligation ${obligationId}:`, error);
+      this.logger.error(`Error verifying obligation ${obligationId}:`, error);
       return false;
     }
   }
@@ -99,7 +108,7 @@ export class OracleService {
     const oracle = this.oracles.get(this.getOracleType(oracleAddress));
     
     if (!oracle) {
-      console.error(`Unknown oracle address: ${oracleAddress}`);
+      this.logger.error(`Unknown oracle address: ${oracleAddress}`);
       return null;
     }
 
@@ -110,11 +119,11 @@ export class OracleService {
         case 'chainlink':
           return await this.queryChainlink(obligationHash, oracle);
         default:
-          console.error(`Unsupported oracle type: ${oracle.type}`);
+          this.logger.error(`Unsupported oracle type: ${oracle.type}`);
           return null;
       }
     } catch (error) {
-      console.error(`Error querying oracle ${oracleAddress}:`, error);
+      this.logger.error(`Error querying oracle ${oracleAddress}:`, error);
       return null;
     }
   }

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title ObligationRegistry
@@ -56,6 +56,15 @@ contract ObligationRegistry is
         uint8 newScore
     );
 
+    // Custom errors
+    error InvalidOracleAddress();
+    error OracleScoreTooLow();
+    error ObligationAlreadyExists();
+    error ObligationDoesNotExist();
+    error ObligationAlreadyVerified();
+    error InvalidOracleScore();
+    error OracleCallFailed();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -87,8 +96,8 @@ contract ObligationRegistry is
         bytes4 oracleFunction,
         bytes calldata parameters
     ) external whenNotPaused returns (bytes32) {
-        require(oracleAddress != address(0), "Invalid oracle address");
-        require(oracleScores[oracleAddress] >= minimumOracleScore, "Oracle score too low");
+        if (oracleAddress == address(0)) revert InvalidOracleAddress();
+        if (oracleScores[oracleAddress] < minimumOracleScore) revert OracleScoreTooLow();
 
         bytes32 obligationId = keccak256(
             abi.encodePacked(
@@ -99,7 +108,7 @@ contract ObligationRegistry is
             )
         );
 
-        require(obligations[obligationId].hash == bytes32(0), "Obligation already exists");
+        if (obligations[obligationId].hash != bytes32(0)) revert ObligationAlreadyExists();
 
         obligations[obligationId] = Obligation({
             hash: hash,
@@ -124,23 +133,20 @@ contract ObligationRegistry is
         bytes32 obligationId
     ) external whenNotPaused nonReentrant returns (bool success) {
         Obligation storage obligation = obligations[obligationId];
-        require(obligation.hash != bytes32(0), "Obligation does not exist");
-        require(!obligation.isVerified, "Obligation already verified");
+        if (obligation.hash == bytes32(0)) revert ObligationDoesNotExist();
+        if (obligation.isVerified) revert ObligationAlreadyVerified();
 
         // Update state before external call (CEI pattern)
         obligation.isVerified = true;
         obligation.verificationTimestamp = block.timestamp;
 
-        // External interaction after state changes
-        (success, ) = obligation.oracleAddress.call(
+        // External interaction after state changes with proper validation
+        (bool ok, bytes memory _ret) = obligation.oracleAddress.call(
             abi.encodePacked(obligation.oracleFunction, obligation.parameters)
         );
-
-        // Revert state if oracle call failed
-        if (!success) {
-            obligation.isVerified = false;
-            obligation.verificationTimestamp = 0;
-        }
+        
+        if (!ok) revert OracleCallFailed();
+        success = ok;
 
         emit ObligationVerified(obligationId, success, block.timestamp);
 
@@ -156,8 +162,8 @@ contract ObligationRegistry is
         address oracle,
         uint8 newScore
     ) external onlyRole(ADMIN_ROLE) {
-        require(oracle != address(0), "Invalid oracle address");
-        require(newScore <= 100, "Score must be between 0 and 100");
+        if (oracle == address(0)) revert InvalidOracleAddress();
+        if (newScore > 100) revert InvalidOracleScore();
 
         oracleScores[oracle] = newScore;
         emit OracleScoreUpdated(oracle, newScore);
@@ -180,7 +186,7 @@ contract ObligationRegistry is
     function updateMinimumOracleScore(
         uint8 newMinimumScore
     ) external onlyRole(ADMIN_ROLE) {
-        require(newMinimumScore <= 100, "Score must be between 0 and 100");
+        if (newMinimumScore > 100) revert InvalidOracleScore();
         minimumOracleScore = newMinimumScore;
     }
 

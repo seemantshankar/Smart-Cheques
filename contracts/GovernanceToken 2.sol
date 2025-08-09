@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20VotesUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20FlashMintUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/interfaces/IERC3156FlashBorrowerUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {ERC20BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
+import {ERC20PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol";
+import {ERC20PermitUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {ERC20VotesUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20VotesUpgradeable.sol";
+import {ERC20FlashMintUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20FlashMintUpgradeable.sol";
+import {IERC3156FlashBorrowerUpgradeable} from "@openzeppelin/contracts-upgradeable/interfaces/IERC3156FlashBorrowerUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 
 /**
@@ -28,6 +28,21 @@ contract GovernanceToken is
     AccessControlUpgradeable,
     UUPSUpgradeable
 {
+    // Custom errors
+    error MaxSupplyCannotBeLessThanCurrentSupply();
+    error MintingCapMustBePositive();
+    error MintingPeriodMustBePositive();
+    error MintingPeriodTooLong();
+    error FeeTooHigh();
+    error MaxAmountTooHigh();
+    error CannotBlacklistZeroAddress();
+    error CannotWhitelistZeroAddress();
+    error ExceedsMintingCapForCurrentPeriod();
+    error AddressIsBlacklisted();
+    error AddressNotWhitelisted();
+    error CallerIsNotAFlashMinter();
+    error FlashMintingIsDisabled();
+    error UnsupportedToken();
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
@@ -144,7 +159,7 @@ contract GovernanceToken is
      * @param _maxSupply The new maximum supply
      */
     function setMaxSupply(uint256 _maxSupply) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_maxSupply >= totalSupply(), "Max supply cannot be less than current supply");
+        if (_maxSupply < totalSupply()) revert MaxSupplyCannotBeLessThanCurrentSupply();
         uint256 oldMaxSupply = maxSupply;
         maxSupply = _maxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, _maxSupply);
@@ -156,9 +171,9 @@ contract GovernanceToken is
      * @param _mintingPeriod The new minting period
      */
     function setMintingCap(uint256 _mintingCap, uint256 _mintingPeriod) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_mintingCap > 0, "Minting cap must be positive");
-        require(_mintingPeriod > 0, "Minting period must be positive");
-        require(_mintingPeriod <= 10 * 365 days, "Minting period too long");
+        if (_mintingCap == 0) revert MintingCapMustBePositive();
+        if (_mintingPeriod == 0) revert MintingPeriodMustBePositive();
+        if (_mintingPeriod > 10 * 365 days) revert MintingPeriodTooLong();
         
         uint256 oldCap = mintingCap;
         uint256 oldPeriod = mintingPeriod;
@@ -184,8 +199,8 @@ contract GovernanceToken is
         uint256 _maxAmount,
         bool _enabled
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_fee <= 1000, "Fee too high"); // Max 10%
-        require(_maxAmount <= maxSupply / 10, "Max amount too high"); // Max 10% of supply
+        if (_fee > 1000) revert FeeTooHigh(); // Max 10%
+        if (_maxAmount > maxSupply / 10) revert MaxAmountTooHigh(); // Max 10% of supply
         
         flashMintFee = _fee;
         maxFlashMintAmount = _maxAmount;
@@ -200,7 +215,7 @@ contract GovernanceToken is
      * @param _blacklisted Whether to blacklist the address
      */
     function setBlacklisted(address account, bool _blacklisted) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(account != address(0), "Cannot blacklist zero address");
+        if (account == address(0)) revert CannotBlacklistZeroAddress();
         blacklisted[account] = _blacklisted;
         emit AddressBlacklisted(account, _blacklisted);
     }
@@ -211,7 +226,7 @@ contract GovernanceToken is
      * @param _whitelisted Whether to whitelist the address
      */
     function setWhitelisted(address account, bool _whitelisted) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(account != address(0), "Cannot whitelist zero address");
+        if (account == address(0)) revert CannotWhitelistZeroAddress();
         whitelisted[account] = _whitelisted;
         emit AddressWhitelisted(account, _whitelisted);
     }
@@ -255,7 +270,7 @@ contract GovernanceToken is
             emit MintingPeriodReset(block.timestamp);
         }
         
-        require(mintedInCurrentPeriod + amount <= mintingCap, "Exceeds minting cap for current period");
+        if (mintedInCurrentPeriod + amount > mintingCap) revert ExceedsMintingCapForCurrentPeriod();
         mintedInCurrentPeriod += amount;
     }
 
@@ -266,11 +281,11 @@ contract GovernanceToken is
      */
     function _checkTransferRestrictions(address from, address to) internal view {
         if (transferRestrictionsEnabled) {
-            require(!blacklisted[from] && !blacklisted[to], "Address is blacklisted");
+            if (blacklisted[from] || blacklisted[to]) revert AddressIsBlacklisted();
             
             // If whitelist is active (contract itself is whitelisted), both parties must be whitelisted
             if (whitelisted[address(this)]) {
-                require(whitelisted[from] && whitelisted[to], "Address not whitelisted");
+                if (!whitelisted[from] || !whitelisted[to]) revert AddressNotWhitelisted();
             }
         }
     }
@@ -326,9 +341,9 @@ contract GovernanceToken is
         uint256 amount,
         bytes calldata data
     ) public override returns (bool) {
-        require(hasRole(FLASH_MINTER_ROLE, _msgSender()), "Caller is not a flash minter");
-        require(flashMintEnabled, "Flash minting is disabled");
-        require(token == address(this), "Unsupported token");
+        if (!hasRole(FLASH_MINTER_ROLE, _msgSender())) revert CallerIsNotAFlashMinter();
+        if (!flashMintEnabled) revert FlashMintingIsDisabled();
+        if (token != address(this)) revert UnsupportedToken();
         return super.flashLoan(receiver, token, amount, data);
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/governance/TimelockController.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 contract SmartChequeTimelockController is TimelockController {
     uint256 public constant EMERGENCY_DELAY = 1; // 1 block for testing

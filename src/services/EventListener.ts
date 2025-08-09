@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { db } from '../db';
+import winston from 'winston';
 
 interface ContractConfig {
   address: string;
@@ -12,11 +13,19 @@ export class EventListener {
   private provider: ethers.JsonRpcProvider;
   private contracts: Map<string, ethers.Contract>;
   private chainId: number;
+  private logger: winston.Logger;
 
   constructor(rpcUrl: string) {
     this.provider = new ethers.JsonRpcProvider(rpcUrl);
     this.contracts = new Map();
     this.chainId = 0;
+    
+    // Initialize logger
+    this.logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      transports: [new winston.transports.Console()],
+      format: winston.format.json()
+    });
   }
 
   async initialize() {
@@ -129,7 +138,7 @@ export class EventListener {
           break;
       }
     } catch (error) {
-      console.error(`Error handling event ${eventName}:`, error);
+      this.logger.error(`Error handling event ${eventName}:`, error);
     }
   }
 
@@ -152,10 +161,12 @@ export class EventListener {
     });
   }
 
-  private async handleChequeUpdated(event: ethers.Event) {
-    const [chequeId, status] = event.args!;
+  private async handleChequeUpdated(_event: ethers.Event) {
+    // Destructure but ignore unused variables with empty slots
+    // const [chequeId, status] = _event.args!;
     // Update cheque status in database
     // Implementation depends on database schema and requirements
+    // TODO: Implement database update when schema is finalized
   }
 
   private async handleDisputeOpened(event: ethers.Event) {
@@ -178,14 +189,16 @@ export class EventListener {
     });
   }
 
-  private async handleDisputeResolved(event: ethers.Event) {
-    const [disputeId, resolutionType] = event.args!;
+  private async handleDisputeResolved(_event: ethers.Event) {
+    // Destructure but ignore unused variables with empty slots
+    // const [disputeId, resolutionType] = _event.args!;
     // Update dispute status in database
     // Implementation depends on database schema and requirements
+    // TODO: Implement database update when schema is finalized
   }
 
   private async handleObligationRegistered(event: ethers.Event) {
-    const [obligationId, _hash, oracleAddress] = event.args!;
+    const [obligationId, , oracleAddress] = event.args!;
     await db.createOracleData({
       obligation_hash: obligationId,
       oracle_address: oracleAddress,
@@ -195,7 +208,8 @@ export class EventListener {
   }
 
   private async handleObligationVerified(event: ethers.Event) {
-    const [_obligationId, _success] = event.args!;
+    // Destructure but ignore unused variables with empty slots
+    const [, ] = event.args!;
     // Optionally persist verification outcome; current schema stores oracle_data only
   }
 

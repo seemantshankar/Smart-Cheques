@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { EventEmitter } from 'events';
+import winston from 'winston';
 
 // Simple Merkle Tree implementation
 class SimpleMerkleTree {
@@ -143,13 +144,19 @@ export class RelayerService extends EventEmitter {
     super();
     this.config = config;
     
-    // Initialize simple logger
-    this.logger = {
-      info: (message: string, meta?: any) => console.log(`[INFO] ${message}`, meta || ''),
-      warn: (message: string, meta?: any) => console.warn(`[WARN] ${message}`, meta || ''),
-      error: (message: string, meta?: any) => console.error(`[ERROR] ${message}`, meta || ''),
-      debug: (message: string, meta?: any) => console.debug(`[DEBUG] ${message}`, meta || '')
-    };
+    // Initialize Winston logger
+  const winstonLogger = winston.createLogger({
+    level: process.env.LOG_LEVEL || 'info',
+    transports: [new winston.transports.Console()],
+    format: winston.format.json()
+  });
+  
+  this.logger = {
+    info: (message: string, meta?: any) => winstonLogger.info(message, { meta }),
+    warn: (message: string, meta?: any) => winstonLogger.warn(message, { meta }),
+    error: (message: string, meta?: any) => winstonLogger.error(message, { meta }),
+    debug: (message: string, meta?: any) => winstonLogger.debug(message, { meta })
+  };
 
     // Initialize wallets
     this.l1Wallet = new ethers.Wallet(config.validatorPrivateKey, config.l1Provider);
@@ -522,10 +529,9 @@ export class RelayerService extends EventEmitter {
    * Clean up old processed deposits to prevent memory leaks
    */
   private cleanupProcessedDeposits(): void {
-    // Keep only recent deposits (last 24 hours)
-    const cutoffTime = Date.now() - (24 * 60 * 60 * 1000);
-    
     // This is a simplified cleanup - in production, you'd want to persist this data
+    // and use a cutoff time like: const cutoffTime = Date.now() - (24 * 60 * 60 * 1000);
+    
     if (this.processedDeposits.size > 10000) {
       this.processedDeposits.clear();
       this.logger.info('Cleaned up processed deposits cache');

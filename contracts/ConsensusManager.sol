@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
@@ -99,28 +99,32 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bool finalized;
     }
     
+    // Configuration struct to reduce state variable count
+    struct ConsensusConfig {
+        uint256 blockTime; // 12 seconds
+        uint256 validationThreshold; // 67% of validators must validate
+        uint256 challengePeriod;
+        uint256 checkpointInterval; // blocks
+        uint256 maxBlockSize; // 1MB
+        uint256 baseGasLimit;
+    }
+
     // State variables
-    ValidatorManager public immutable validatorManager;
-    
+    ValidatorManager public immutable VALIDATOR_MANAGER;
+
     mapping(uint256 => BlockHeader) private blockHeaders;
     mapping(bytes32 => BlockValidation) private blockValidations;
     mapping(bytes32 => FraudProof) private fraudProofs;
     mapping(uint256 => Checkpoint) private checkpoints;
     mapping(address => uint256) public lastProposedBlock;
     mapping(bytes32 => bool) public processedTransactions;
-    
+
     uint256 public currentBlockNumber;
     uint256 public lastFinalizedBlock;
     uint256 public lastCheckpointBlock;
     bytes32 public currentStateRoot;
-    
-    // Configuration
-    uint256 public blockTime = 12; // 12 seconds
-    uint256 public validationThreshold = 67; // 67% of validators must validate
-    uint256 public challengePeriod = 7 days;
-    uint256 public checkpointInterval = 256; // blocks
-    uint256 public maxBlockSize = 1000000; // 1MB
-    uint256 public baseGasLimit = 30000000;
+
+    ConsensusConfig public consensusConfig;
     
     // Events
     event BlockProposed(
@@ -160,8 +164,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes32 stateRoot
     );
     
-    constructor(address _validatorManager) {
-        validatorManager = ValidatorManager(_validatorManager);
+    constructor(address _validatorManager) public {
+        VALIDATOR_MANAGER = ValidatorManager(_validatorManager);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(SEQUENCER_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
@@ -169,6 +173,16 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         // Initialize genesis block
         currentBlockNumber = 0;
         currentStateRoot = keccak256("genesis");
+        
+        // Initialize configuration
+        consensusConfig = ConsensusConfig({
+            blockTime: 12, // 12 seconds
+            validationThreshold: 67, // 67% of validators must validate
+            challengePeriod: 7 days,
+            checkpointInterval: 256, // blocks
+            maxBlockSize: 1000000, // 1MB
+            baseGasLimit: 30000000
+        });
     }
     
     /**
@@ -188,9 +202,9 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         uint256 gasUsed,
         bytes memory extraData
     ) external onlyRole(SEQUENCER_ROLE) whenNotPaused {
-        if (gasUsed > baseGasLimit) revert InvalidGasLimit();
+        if (gasUsed > consensusConfig.baseGasLimit) revert InvalidGasLimit();
         if (extraData.length > 32) revert InvalidDifficulty();
-        if (block.timestamp < lastProposedBlock[msg.sender] + blockTime) revert InvalidTimestamp();
+        if (block.timestamp < lastProposedBlock[msg.sender] + consensusConfig.blockTime) revert InvalidTimestamp();
         
         uint256 newBlockNumber = currentBlockNumber + 1;
         
@@ -202,7 +216,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             transactionsRoot: transactionsRoot,
             timestamp: block.timestamp,
             proposer: msg.sender,
-            gasLimit: baseGasLimit,
+            gasLimit: consensusConfig.baseGasLimit,
             gasUsed: gasUsed,
             receiptsRoot: receiptsRoot,
             difficulty: 1, // Fixed difficulty for PoS
@@ -218,7 +232,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         BlockValidation storage validation = blockValidations[blockHash];
         validation.blockHash = blockHash;
         validation.requiredValidators = _calculateRequiredValidators();
-        validation.challengeDeadline = block.timestamp + challengePeriod;
+        validation.challengeDeadline = block.timestamp + consensusConfig.challengePeriod;
         
         // Update state
         currentBlockNumber = newBlockNumber;
@@ -284,13 +298,13 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         if (block.timestamp > validation.challengeDeadline) revert InvalidChallengePeriod();
 
         // Verify caller has sufficient stake
-        (uint256 callerStake, bool isActive) = validatorManager.getValidatorStake(msg.sender);
+        (uint256 callerStake, bool isActive) = VALIDATOR_MANAGER.getValidatorStake(msg.sender);
         if (callerStake == 0 || !isActive) revert UnauthorizedAccess();
 
         // Mark as challenged and extend challenge window
         validation.challenged = true;
         validation.challenger = msg.sender;
-        validation.challengeDeadline = block.timestamp + challengePeriod;
+        validation.challengeDeadline = block.timestamp + consensusConfig.challengePeriod;
         
         // Store fraud proof
         fraudProofs[blockHash] = FraudProof({
@@ -336,7 +350,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         if (isValid) {
             // Fraud proven - slash the block proposer
             BlockHeader memory header = _getBlockByHash(blockHash);
-            validatorManager.slashValidator(
+            VALIDATOR_MANAGER.slashValidator(
                 header.proposer,
                 ValidatorManager.SlashingReason.INVALID_BLOCK,
                 abi.encode(proof)
@@ -346,15 +360,15 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             _revertToBlock(header.blockNumber - 1);
             
             // Reward the challenger
-            (uint256 challengerStake, bool challengerActive) = validatorManager.getValidatorStake(proof.challenger);
+            (uint256 challengerStake, bool challengerActive) = VALIDATOR_MANAGER.getValidatorStake(proof.challenger);
             if (challengerStake > 0 && challengerActive) {
                 // Transfer reward to challenger
-                IERC20 governanceToken = IERC20(address(validatorManager.governanceToken()));
+                IERC20 governanceToken = IERC20(address(VALIDATOR_MANAGER.governanceToken()));
                 SafeERC20.safeTransfer(governanceToken, proof.challenger, challengerStake / 10);
             }
         } else {
             // Fraud proof invalid - slash the challenger
-            validatorManager.slashValidator(
+            VALIDATOR_MANAGER.slashValidator(
                 proof.challenger,
                 ValidatorManager.SlashingReason.MALICIOUS_BEHAVIOR,
                 abi.encode(proof)
@@ -370,7 +384,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function createCheckpoint(uint256 blockNumber) external onlyRole(ORACLE_ROLE) {
         if (blockNumber > lastFinalizedBlock) revert BlockNotFound();
-        if (blockNumber < lastCheckpointBlock + checkpointInterval) revert BlockTooOld();
+        if (blockNumber < lastCheckpointBlock + consensusConfig.checkpointInterval) revert BlockTooOld();
         
         BlockHeader memory header = blockHeaders[blockNumber];
         bytes32 validatorSetHash = _calculateValidatorSetHash();
@@ -402,7 +416,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         lastFinalizedBlock = header.blockNumber;
         
         // Record block production for validator rewards
-        validatorManager.recordBlockProduction(header.proposer, header.blockNumber);
+        VALIDATOR_MANAGER.recordBlockProduction(header.proposer, header.blockNumber);
         
         emit BlockFinalized(header.blockNumber, blockHash, validation.validatorCount);
     }
@@ -412,8 +426,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @return Required validator count
      */
     function _calculateRequiredValidators() internal view returns (uint256) {
-        address[] memory activeValidators = validatorManager.getActiveValidators();
-        return (activeValidators.length * validationThreshold) / 100;
+        address[] memory activeValidators = VALIDATOR_MANAGER.getActiveValidators();
+        return (activeValidators.length * consensusConfig.validationThreshold) / 100;
     }
     
     /**
@@ -448,7 +462,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
                 return blockHeaders[i];
             }
         }
-        revert("Block not found");
+        revert BlockNotFound();
     }
     
     /**
@@ -474,7 +488,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @return Validator set hash
      */
     function _calculateValidatorSetHash() internal view returns (bytes32) {
-        address[] memory activeValidators = validatorManager.getActiveValidators();
+        address[] memory activeValidators = VALIDATOR_MANAGER.getActiveValidators();
         return keccak256(abi.encode(activeValidators));
     }
     
@@ -520,16 +534,16 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     
     // Governance functions
     function setBlockTime(uint256 _blockTime) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        blockTime = _blockTime;
+        consensusConfig.blockTime = _blockTime;
     }
 
     function setValidationThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (_threshold <= 50 || _threshold > 100) revert InvalidValidatorSet();
-        validationThreshold = _threshold;
+        consensusConfig.validationThreshold = _threshold;
     }
 
     function setChallengePeriod(uint256 _period) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        challengePeriod = _period;
+        consensusConfig.challengePeriod = _period;
     }
 
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {

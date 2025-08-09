@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
-import "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-import "./SmartChequeEscrow.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
+import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {SmartChequeEscrow} from "./SmartChequeEscrow.sol";
 
 /**
  * @title SmartChequeFactory
@@ -31,6 +31,15 @@ contract SmartChequeFactory is
     // Beacon for SmartChequeEscrow implementation
     UpgradeableBeacon public escrowBeacon;
 
+    // Custom errors
+    error InvalidBuyerAddress();
+    error InvalidSellerAddress();
+    error InvalidTotalAmount();
+    error NoMilestonesProvided();
+    error MilestonesAndObligationsMismatch();
+    error MilestoneAmountsMismatch();
+    error ChequeIdAlreadyExists();
+
     event ChequeCreated(
         bytes32 indexed chequeId,
         address indexed chequeAddress,
@@ -40,7 +49,7 @@ contract SmartChequeFactory is
     );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -75,17 +84,17 @@ contract SmartChequeFactory is
         uint256[] memory milestones,
         bytes32[] memory obligations
     ) external whenNotPaused returns (bytes32) {
-        require(buyer != address(0), "Invalid buyer address");
-        require(seller != address(0), "Invalid seller address");
-        require(totalAmount > 0, "Invalid total amount");
-        require(milestones.length > 0, "No milestones provided");
-        require(milestones.length == obligations.length, "Milestones and obligations length mismatch");
+        if (buyer == address(0)) revert InvalidBuyerAddress();
+        if (seller == address(0)) revert InvalidSellerAddress();
+        if (totalAmount == 0) revert InvalidTotalAmount();
+        if (milestones.length == 0) revert NoMilestonesProvided();
+        if (milestones.length != obligations.length) revert MilestonesAndObligationsMismatch();
 
         uint256 totalMilestoneAmount = 0;
         for (uint256 i = 0; i < milestones.length; i++) {
             totalMilestoneAmount += milestones[i];
         }
-        require(totalMilestoneAmount == totalAmount, "Milestone amounts do not match total");
+        if (totalMilestoneAmount != totalAmount) revert MilestoneAmountsMismatch();
 
         // Generate unique cheque ID
         bytes32 chequeId = keccak256(
@@ -96,7 +105,7 @@ contract SmartChequeFactory is
                 block.timestamp
             )
         );
-        require(cheques[chequeId] == address(0), "Cheque ID already exists");
+        if (cheques[chequeId] != address(0)) revert ChequeIdAlreadyExists();
 
         // Create initialization data
         bytes memory initData = abi.encodeWithSelector(
@@ -170,5 +179,7 @@ contract SmartChequeFactory is
     /**
      * @dev Function that should revert when msg.sender is not authorized to upgrade the contract
      */
-    function _authorizeUpgrade(address) internal override onlyRole(ADMIN_ROLE) {}
+    function _authorizeUpgrade(address) internal override onlyRole(ADMIN_ROLE) {
+        // solhint-disable-next-line no-empty-blocks
+    }
 }

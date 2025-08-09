@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Compatible with OpenZeppelin Contracts ^5.0.0
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {Governor} from "@openzeppelin/contracts/governance/Governor.sol";
 import {GovernorCountingSimple} from "@openzeppelin/contracts/governance/extensions/GovernorCountingSimple.sol";
@@ -12,6 +12,12 @@ import {IVotes} from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 contract SmartChequeGovernor is Governor, GovernorSettings, GovernorCountingSimple, GovernorVotes, GovernorVotesQuorumFraction, GovernorTimelockControl {
+    // Custom errors
+    error EmptyTargetsArray();
+    error TargetsValuesLengthMismatch();
+    error TargetsCalldatasLengthMismatch();
+    error EmptyDescription();
+    error ProposalCreationFailed();
     constructor(IVotes _token, TimelockController _timelock)
         Governor("SmartChequeGovernor")
         GovernorSettings(1 /* 1 block */, 5 /* 5 blocks */, 0)
@@ -145,15 +151,15 @@ contract SmartChequeGovernor is Governor, GovernorSettings, GovernorCountingSimp
         bytes[] memory calldatas,
         string memory description
     ) public returns (uint256 proposalId) {
-        require(targets.length > 0, "Empty targets array");
-        require(targets.length == values.length, "Targets and values length mismatch");
-        require(targets.length == calldatas.length, "Targets and calldatas length mismatch");
-        require(bytes(description).length > 0, "Empty description");
+        if (targets.length == 0) revert EmptyTargetsArray();
+        if (targets.length != values.length) revert TargetsValuesLengthMismatch();
+        if (targets.length != calldatas.length) revert TargetsCalldatasLengthMismatch();
+        if (bytes(description).length == 0) revert EmptyDescription();
         
         proposalId = propose(targets, values, calldatas, description);
         
         // Verify proposal was created successfully
-        require(proposalExists(proposalId), "Proposal creation failed");
+        if (!proposalExists(proposalId)) revert ProposalCreationFailed();
         
         return proposalId;
     }

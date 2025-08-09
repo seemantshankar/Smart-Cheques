@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
@@ -105,14 +105,18 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     uint256 public totalDelegatedStake;
     uint256 public slashingEventCount;
     
-    // Configuration
-    uint256 public minValidatorStake = 50_000 * 10**18; // 50k tokens
-    uint256 public maxValidators = 100;
-    uint256 public jailDuration = 7 days;
-    uint256 public slashingPercentages = 500; // 5% in basis points
-    uint256 public downtimeThreshold = 50; // 50 missed blocks
-    uint256 public blockReward = 10 * 10**18; // 10 tokens per block
-    uint256 public maxCommission = 2000; // 20% in basis points
+    // Configuration struct to reduce state variable count
+    struct ValidatorConfig {
+        uint256 minValidatorStake; // 50k tokens
+        uint256 maxValidators;
+        uint256 jailDuration;
+        uint256 slashingPercentages; // 5% in basis points
+        uint256 downtimeThreshold; // 50 missed blocks
+        uint256 blockReward; // 10 tokens per block
+        uint256 maxCommission; // 20% in basis points
+    }
+    
+    ValidatorConfig public validatorConfig;
     
     // Events
     event ValidatorRegistered(address indexed validator, uint256 stake, string moniker);
@@ -124,14 +128,25 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     event DelegationRemoved(address indexed delegator, address indexed validator, uint256 amount);
     event BlockProduced(address indexed validator, uint256 blockNumber, uint256 reward);
     
-    address public treasuryAddress;
+    address public TREASURY_ADDRESS;
 
     constructor(address _governanceToken) {
         governanceToken = GovernanceToken(_governanceToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(GOVERNANCE_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
-        treasuryAddress = msg.sender; // default; should be set post-deploy via governance to TREASURY_ADDRESS
+        TREASURY_ADDRESS = msg.sender; // default; should be set post-deploy via governance to TREASURY_ADDRESS
+        
+        // Initialize configuration
+        validatorConfig = ValidatorConfig({
+            minValidatorStake: 50_000 * 10**18, // 50k tokens
+            maxValidators: 100,
+            jailDuration: 7 days,
+            slashingPercentages: 500, // 5% in basis points
+            downtimeThreshold: 50, // 50 missed blocks
+            blockReward: 10 * 10**18, // 10 tokens per block
+            maxCommission: 2000 // 20% in basis points
+        });
     }
     
     /**
@@ -147,10 +162,10 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         string memory moniker,
         uint256 commission
     ) external nonReentrant whenNotPaused {
-        if (stake < minValidatorStake) revert InsufficientStake();
+        if (stake < validatorConfig.minValidatorStake) revert InsufficientStake();
         if (validators[msg.sender].validator != address(0)) revert ValidatorAlreadyRegistered();
-        if (commission > maxCommission) revert CommissionTooHigh();
-        if (activeValidators.length >= maxValidators) revert MaxValidatorsReached();
+        if (commission > validatorConfig.maxCommission) revert CommissionTooHigh();
+        if (activeValidators.length >= validatorConfig.maxValidators) revert MaxValidatorsReached();
         
         // Transfer stake to contract
         governanceToken.safeTransferFrom(msg.sender, address(this), stake);
@@ -241,7 +256,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         ValidatorInfo storage validatorInfo = validators[validator];
         if (validatorInfo.status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
         
-        uint256 slashAmount = validatorInfo.stake.mul(slashingPercentages).div(10000);
+        uint256 slashAmount = validatorInfo.stake.mul(validatorConfig.slashingPercentages).div(10000);
         
         // Apply slashing
         validatorInfo.stake = validatorInfo.stake.sub(slashAmount);
@@ -249,7 +264,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         validatorInfo.status = ValidatorStatus.SLASHED;
         
         // Remove from active validators if stake falls below minimum
-        if (validatorInfo.stake < minValidatorStake) {
+        if (validatorInfo.stake < validatorConfig.minValidatorStake) {
             _removeFromActiveValidators(validator);
         }
         
@@ -295,9 +310,9 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     function unjailValidator() external {
         ValidatorInfo storage validatorInfo = validators[msg.sender];
         if (validatorInfo.status != ValidatorStatus.JAILED) revert ValidatorNotJailed();
-        if (block.timestamp < validatorInfo.jailTime.add(jailDuration)) revert InvalidAmount();
-        if (validatorInfo.stake < minValidatorStake) revert InsufficientStake();
-        if (activeValidators.length >= maxValidators) revert MaxValidatorsReached();
+        if (block.timestamp < validatorInfo.jailTime.add(validatorConfig.jailDuration)) revert InvalidAmount();
+        if (validatorInfo.stake < validatorConfig.minValidatorStake) revert InsufficientStake();
+        if (activeValidators.length >= validatorConfig.maxValidators) revert MaxValidatorsReached();
         
         validatorInfo.status = ValidatorStatus.ACTIVE;
         validatorInfo.jailTime = 0;
@@ -323,14 +338,14 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         if (isJailed(validator)) revert ValidatorIsJailed();
         
         ValidatorInfo storage validatorInfo = validators[validator];
-        if (validatorInfo.stake < minValidatorStake) revert InsufficientStake();
+        if (validatorInfo.stake < validatorConfig.minValidatorStake) revert InsufficientStake();
         
         validatorInfo.lastActiveBlock = blockNumber;
         validatorInfo.missedBlocks = 0; // Reset missed blocks counter
         
         // Distribute block reward
-        uint256 validatorReward = blockReward.mul(10000 - validatorInfo.commission).div(10000);
-        uint256 commissionReward = blockReward.sub(validatorReward);
+        uint256 validatorReward = validatorConfig.blockReward.mul(10000 - validatorInfo.commission).div(10000);
+        uint256 commissionReward = validatorConfig.blockReward.sub(validatorReward);
         
         // Mint rewards
         governanceToken.safeTransfer(validator, validatorReward);
@@ -338,7 +353,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
             governanceToken.safeTransfer(validator, commissionReward);
         }
         
-        emit BlockProduced(validator, blockNumber, blockReward);
+        emit BlockProduced(validator, blockNumber, validatorConfig.blockReward);
     }
     
     /**
@@ -350,7 +365,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         ValidatorInfo storage validatorInfo = validators[validator];
         return validatorInfo.status == ValidatorStatus.ACTIVE &&
                !isJailed(validator) &&
-               validatorInfo.stake >= minValidatorStake;
+               validatorInfo.stake >= validatorConfig.minValidatorStake;
     }
     
     /**
@@ -369,7 +384,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      * @return address Address to send slashed tokens
      */
     function getSlashAddress() internal view returns (address) {
-        return treasuryAddress;
+        return TREASURY_ADDRESS;
     }
 
     /**
@@ -377,7 +392,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function setTreasuryAddress(address newTreasury) external onlyRole(GOVERNANCE_ROLE) {
         if (newTreasury == address(0)) revert InvalidAddress();
-        treasuryAddress = newTreasury;
+        TREASURY_ADDRESS = newTreasury;
     }
 
     /**
@@ -452,7 +467,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
         validatorInfo.missedBlocks++;
         
         // Jail for excessive downtime
-        if (validatorInfo.missedBlocks >= downtimeThreshold) {
+        if (validatorInfo.missedBlocks >= validatorConfig.downtimeThreshold) {
             _jailValidator(validator, SlashingReason.DOWNTIME);
         }
     }
@@ -467,7 +482,7 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
          if (validatorInfo.status != ValidatorStatus.ACTIVE) revert ValidatorNotActive();
          
          validatorInfo.status = ValidatorStatus.JAILED;
-         validatorInfo.jailedUntil = block.timestamp + jailDuration;
+         validatorInfo.jailedUntil = block.timestamp + validatorConfig.jailDuration;
          
          _removeFromActiveValidators(validator);
          
@@ -539,20 +554,20 @@ contract ValidatorManager is AccessControl, ReentrancyGuard, Pausable {
     
     // Governance functions
     function setMinValidatorStake(uint256 _minStake) external onlyRole(GOVERNANCE_ROLE) {
-        minValidatorStake = _minStake;
+        validatorConfig.minValidatorStake = _minStake;
     }
     
     function setMaxValidators(uint256 _maxValidators) external onlyRole(GOVERNANCE_ROLE) {
-        maxValidators = _maxValidators;
+        validatorConfig.maxValidators = _maxValidators;
     }
     
     function setSlashingPercentage(uint256 _percentage) external onlyRole(GOVERNANCE_ROLE) {
         if (_percentage > 5000) revert SlashingPercentageTooHigh(); // Max 50%
-        slashingPercentages = _percentage;
+        validatorConfig.slashingPercentages = _percentage;
     }
     
     function setBlockReward(uint256 _reward) external onlyRole(GOVERNANCE_ROLE) {
-        blockReward = _reward;
+        validatorConfig.blockReward = _reward;
     }
     
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {

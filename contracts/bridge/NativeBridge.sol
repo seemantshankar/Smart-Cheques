@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -157,7 +157,7 @@ contract NativeBridge is
     error InsufficientValidatorQuorum();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -548,11 +548,8 @@ contract NativeBridge is
     /**
      * @dev Authorize upgrade
      */
-    function _authorizeUpgrade(address) internal override onlyRole(UPGRADER_ROLE) {
-        // no-op: access control enforced by onlyRole(UPGRADER_ROLE); required by UUPS pattern
-        bool __noop = true; // satisfies no-empty-blocks without changing logic
-        // reference __noop in a benign way to avoid no-unused-vars and avoid empty block
-        if (!__noop) { __noop = !__noop; }
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
+        if (newImplementation == address(0)) revert ZeroAddress();
     }
     /**
      * @dev Get contract balance
@@ -589,7 +586,7 @@ contract NativeBridge is
     /**
      * @dev Receive function to accept ETH deposits
      */
-    receive() external payable {
-        // Allow contract to receive ETH for deposits
-    }
+    // solhint-disable-next-line no-empty-blocks
+    // solhint-disable-next-line no-empty-blocks
+    receive() external payable {}
 }

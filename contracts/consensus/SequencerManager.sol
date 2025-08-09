@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/utils/math/Math.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
  * @title SequencerManager
  * @dev Manages sequencer registration, staking, and rotation for the L2 network
  * @notice This contract handles sequencer lifecycle and block production rights
  */
-contract SequencerManager is 
+contract SequencerManager is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
@@ -181,8 +181,31 @@ contract SequencerManager is
         uint256 delegatorReward
     );
 
+    // Custom errors
+    error InsufficientStake();
+    error InvalidRewardAddress();
+    error InvalidCommissionRate();
+    error InvalidPublicKeyLength();
+    error SequencerAlreadyRegistered();
+    error MaxSequencersReached();
+    error NotASequencer();
+    error InvalidDelegationAmount();
+    error SequencerNotFound();
+    error SequencerNotActive();
+    error InsufficientDelegation();
+    error WithdrawalAlreadyInitiated();
+    error NoWithdrawalInitiated();
+    error WithdrawalDelayNotMet();
+    error SequencerNotJailed();
+    error JailPeriodNotCompleted();
+    error TransferFailed();
+    error InvalidPercentage();
+    error RotationPeriodNotMet();
+    error NoActiveSequencers();
+    error InvalidImplementation();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor() public {
         _disableInitializers();
     }
 
@@ -214,12 +237,12 @@ contract SequencerManager is
         uint256 commission,
         bytes calldata publicKey
     ) external payable whenNotPaused nonReentrant {
-        require(msg.value >= MIN_STAKE, "Insufficient stake");
-        require(rewardAddress != address(0), "Invalid reward address");
-        require(commission >= minCommissionRate && commission <= maxCommissionRate, "Invalid commission rate");
-        require(publicKey.length == 64, "Invalid public key length");
-        require(sequencers[msg.sender].operator == address(0), "Already registered");
-        require(activeSequencers.length < MAX_SEQUENCERS, "Max sequencers reached");
+        if (msg.value < MIN_STAKE) revert InsufficientStake();
+        if (rewardAddress == address(0)) revert InvalidRewardAddress();
+        if (commission < minCommissionRate || commission > maxCommissionRate) revert InvalidCommissionRate();
+        if (publicKey.length != 64) revert InvalidPublicKeyLength();
+        if (sequencers[msg.sender].operator != address(0)) revert SequencerAlreadyRegistered();
+        if (activeSequencers.length >= MAX_SEQUENCERS) revert MaxSequencersReached();
 
         sequencers[msg.sender] = Sequencer({
             operator: msg.sender,
@@ -259,9 +282,9 @@ contract SequencerManager is
         address newRewardAddress,
         uint256 newCommission
     ) external whenNotPaused {
-        require(sequencers[msg.sender].operator != address(0), "Not a sequencer");
-        require(newRewardAddress != address(0), "Invalid reward address");
-        require(newCommission >= minCommissionRate && newCommission <= maxCommissionRate, "Invalid commission rate");
+        if (sequencers[msg.sender].operator == address(0)) revert NotASequencer();
+        if (newRewardAddress == address(0)) revert InvalidRewardAddress();
+        if (newCommission < minCommissionRate || newCommission > maxCommissionRate) revert InvalidCommissionRate();
 
         sequencers[msg.sender].rewardAddress = newRewardAddress;
         sequencers[msg.sender].commission = newCommission;
@@ -274,9 +297,9 @@ contract SequencerManager is
      * @param sequencer Address of the sequencer to delegate to
      */
     function delegateStake(address sequencer) external payable whenNotPaused nonReentrant {
-        require(msg.value > 0, "Invalid delegation amount");
-        require(sequencers[sequencer].operator != address(0), "Sequencer not found");
-        require(sequencers[sequencer].status == SequencerStatus.Active, "Sequencer not active");
+        if (msg.value == 0) revert InvalidDelegationAmount();
+        if (sequencers[sequencer].operator == address(0)) revert SequencerNotFound();
+        if (sequencers[sequencer].status != SequencerStatus.Active) revert SequencerNotActive();
 
         delegations[msg.sender][sequencer].amount += msg.value;
         delegations[msg.sender][sequencer].timestamp = block.timestamp;
@@ -296,9 +319,9 @@ contract SequencerManager is
         address sequencer,
         uint256 amount
     ) external whenNotPaused {
-        require(amount > 0, "Invalid amount");
-        require(delegations[msg.sender][sequencer].amount >= amount, "Insufficient delegation");
-        require(delegations[msg.sender][sequencer].withdrawTime == 0, "Withdrawal already initiated");
+        if (amount == 0) revert InvalidDelegationAmount();
+        if (delegations[msg.sender][sequencer].amount < amount) revert InsufficientDelegation();
+        if (delegations[msg.sender][sequencer].withdrawTime != 0) revert WithdrawalAlreadyInitiated();
 
         delegations[msg.sender][sequencer].withdrawTime = block.timestamp;
         
@@ -312,8 +335,8 @@ contract SequencerManager is
     function completeUndelegation(address sequencer) external nonReentrant {
         Delegation storage delegation = delegations[msg.sender][sequencer];
         
-        require(delegation.withdrawTime > 0, "No withdrawal initiated");
-        require(block.timestamp >= delegation.withdrawTime + exitDelay, "Withdrawal delay not met");
+        if (delegation.withdrawTime == 0) revert NoWithdrawalInitiated();
+        if (block.timestamp < delegation.withdrawTime + exitDelay) revert WithdrawalDelayNotMet();
         
         uint256 amount = delegation.amount;
         delegation.amount = 0;
@@ -323,7 +346,7 @@ contract SequencerManager is
         totalStaked -= amount;
         
         (bool success, ) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        if (!success) revert TransferFailed();
     }
 
     /**
@@ -335,7 +358,7 @@ contract SequencerManager is
         address sequencer,
         uint256 blockNumber
     ) external onlyRole(ADMIN_ROLE) {
-        require(sequencers[sequencer].operator != address(0), "Sequencer not found");
+        if (sequencers[sequencer].operator == address(0)) revert SequencerNotFound();
         
         sequencers[sequencer].lastBlockTime = block.timestamp;
         sequencers[sequencer].blocksProduced++;
@@ -354,7 +377,7 @@ contract SequencerManager is
      * @param sequencer Address of the sequencer
      */
     function recordMissedBlock(address sequencer) external onlyRole(ADMIN_ROLE) {
-        require(sequencers[sequencer].operator != address(0), "Sequencer not found");
+        if (sequencers[sequencer].operator == address(0)) revert SequencerNotFound();
         
         sequencers[sequencer].missedBlocks++;
         sequencerMetrics[sequencer].totalBlocks++;
@@ -376,6 +399,8 @@ contract SequencerManager is
         address sequencer,
         string calldata reason
     ) external onlyRole(SLASHER_ROLE) {
+        if (sequencers[sequencer].operator == address(0)) revert SequencerNotFound();
+        if (sequencers[sequencer].status != SequencerStatus.Active) revert SequencerNotActive();
         _jailSequencer(sequencer, reason);
     }
 
@@ -384,8 +409,8 @@ contract SequencerManager is
      * @param sequencer Address of the sequencer to unjail
      */
     function unjailSequencer(address sequencer) external {
-        require(sequencers[sequencer].status == SequencerStatus.Jailed, "Sequencer not jailed");
-        require(block.timestamp >= sequencers[sequencer].jailTime + jailDuration, "Jail period not completed");
+        if (sequencers[sequencer].status != SequencerStatus.Jailed) revert SequencerNotJailed();
+        if (block.timestamp < sequencers[sequencer].jailTime + jailDuration) revert JailPeriodNotCompleted();
         
         sequencers[sequencer].status = SequencerStatus.Active;
         sequencers[sequencer].jailTime = 0;
@@ -417,8 +442,8 @@ contract SequencerManager is
         uint256 percentage,
         string calldata reason
     ) external onlyRole(SLASHER_ROLE) {
-        require(sequencers[sequencer].operator != address(0), "Sequencer not found");
-        require(percentage <= 10000, "Invalid percentage");
+        if (sequencers[sequencer].operator == address(0)) revert SequencerNotFound();
+        if (percentage > 10000) revert InvalidPercentage();
         
         uint256 slashAmount = (sequencers[sequencer].stake * percentage) / 10000;
         sequencers[sequencer].stake -= slashAmount;
@@ -448,8 +473,8 @@ contract SequencerManager is
      * @dev Rotate to next sequencer
      */
     function rotateSequencer() external {
-        require(block.timestamp >= lastRotationTime + ROTATION_PERIOD, "Rotation period not met");
-        require(activeSequencers.length > 0, "No active sequencers");
+        if (block.timestamp < lastRotationTime + ROTATION_PERIOD) revert RotationPeriodNotMet();
+        if (activeSequencers.length == 0) revert NoActiveSequencers();
         
         address oldSequencer = activeSequencers[currentSequencerIndex % activeSequencers.length];
         currentSequencerIndex = (currentSequencerIndex + 1) % activeSequencers.length;
@@ -529,7 +554,9 @@ contract SequencerManager is
     /**
      * @dev Authorize contract upgrades
      */
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
+        if (newImplementation == address(0)) revert InvalidImplementation();
+    }
 
     /**
      * @dev Receive function to accept ETH
