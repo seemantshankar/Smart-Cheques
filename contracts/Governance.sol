@@ -18,9 +18,9 @@ contract SmartChequeGovernor is Governor, GovernorSettings, GovernorCountingSimp
     error TargetsCalldatasLengthMismatch();
     error EmptyDescription();
     error ProposalCreationFailed();
-    constructor(IVotes _token, TimelockController _timelock)
+    constructor(IVotes _token, TimelockController _timelock, uint256 _proposalThreshold)
         Governor("SmartChequeGovernor")
-        GovernorSettings(1 /* 1 block */, 5 /* 5 blocks */, 0)
+        GovernorSettings(1 /* 1 block */, 5 /* 5 blocks */, _proposalThreshold)
         GovernorVotes(_token)
         GovernorVotesQuorumFraction(4)
         GovernorTimelockControl(_timelock)

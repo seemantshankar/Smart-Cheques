@@ -94,15 +94,16 @@ const ChequeDetails = () => {
     try {
       setCompleting(true);
 
+      const signer = await provider.getSigner();
       const chequeContract = new ethers.Contract(
         cheque.address,
         ['function completeMilestone(uint256,bytes) returns (bool)'],
-        provider.getSigner()
+        signer as any
       );
 
       const tx = await chequeContract.completeMilestone(
         selectedMilestone,
-        ethers.utils.toUtf8Bytes(proof)
+        ethers.toUtf8Bytes(proof)
       );
 
       await tx.wait();
@@ -263,7 +264,7 @@ const ChequeDetails = () => {
                 </HStack>
 
                 <Text color="gray.500" fontSize="sm" mb={2}>
-                  Amount: {ethers.utils.formatEther(milestone.amount)} ETH
+                  Amount: {ethers.formatEther(milestone.amount)} ETH
                 </Text>
 
                 <Text fontSize="sm" mb={2}>

@@ -72,7 +72,7 @@ const CreateCheque = () => {
       setLoading(true);
 
       // Validate seller address
-      if (!ethers.utils.isAddress(seller)) {
+      if (!ethers.isAddress(seller)) {
         throw new Error('Invalid seller address');
       }
 
@@ -82,18 +82,19 @@ const CreateCheque = () => {
       }
 
       const totalAmount = milestones.reduce(
-        (sum, milestone) => sum.add(ethers.utils.parseEther(milestone.amount || '0')),
-        ethers.BigNumber.from(0)
+        (sum, milestone) => sum + ethers.parseEther(milestone.amount || '0'),
+        BigInt(0)
       );
 
-      const milestoneAmounts = milestones.map(m => ethers.utils.parseEther(m.amount));
-      const obligations = milestones.map(m => ethers.utils.id(m.obligation));
+      const milestoneAmounts = milestones.map(m => ethers.parseEther(m.amount));
+      const obligations = milestones.map(m => ethers.id(m.obligation));
 
       // Get contract instance
+      const signer = await provider.getSigner();
       const factoryContract = new ethers.Contract(
         import.meta.env.VITE_FACTORY_ADDRESS!,
         ['function createCheque(address,address,uint256,uint256[],bytes32[]) returns (uint256)'],
-        provider.getSigner()
+        signer as any
       );
 
       // Create cheque
@@ -106,8 +107,16 @@ const CreateCheque = () => {
       );
 
       const receipt = await tx.wait();
-      const event = receipt.events?.find((e: ethers.Event) => e.event === 'ChequeCreated');
-      const chequeId = event?.args?.chequeId;
+      const event = receipt?.logs?.find((log: any) => {
+        try {
+          const parsed = factoryContract.interface.parseLog(log);
+          return parsed?.name === 'ChequeCreated';
+        } catch {
+          return false;
+        }
+      });
+      const parsedEvent = event ? factoryContract.interface.parseLog(event) : null;
+      const chequeId = parsedEvent?.args?.chequeId;
 
       // Save additional data to backend
       await fetch(`${import.meta.env.VITE_API_URL}/api/cheques/${chequeId}/metadata`, {

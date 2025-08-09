@@ -30,7 +30,7 @@ export class EventListener {
 
   async initialize() {
     const network = await this.provider.getNetwork();
-    this.chainId = network.chainId;
+    this.chainId = Number(network.chainId);
 
     // Initialize contract configs
     const contracts: ContractConfig[] = [
@@ -80,7 +80,7 @@ export class EventListener {
     for (const eventName of events) {
       contract.on(eventName, async (...args) => {
         const event = args[args.length - 1];
-        await this.handleEvent(contract.target, eventName, event);
+        await this.handleEvent(contract.target.toString(), eventName, event);
       });
     }
   }
@@ -97,7 +97,7 @@ export class EventListener {
         const events = await contract.queryFilter(filter, startBlock, endBlock);
 
         for (const event of events) {
-          await this.handleEvent(contract.target, eventName, event);
+          await this.handleEvent(contract.target.toString(), eventName, event as ethers.EventLog);
         }
       }
     }
@@ -112,7 +112,7 @@ export class EventListener {
         event_name: eventName,
         transaction_hash: event.transactionHash,
         block_number: event.blockNumber,
-        log_index: event.logIndex,
+        log_index: event.index,
         parameters: event.args || {}
       });
 
@@ -142,7 +142,7 @@ export class EventListener {
     }
   }
 
-  private async handleChequeCreated(event: ethers.Event) {
+  private async handleChequeCreated(event: ethers.EventLog) {
     const [chequeId, buyer, seller] = event.args!;
     
     // Get cheque details from contract
@@ -161,7 +161,7 @@ export class EventListener {
     });
   }
 
-  private async handleChequeUpdated(_event: ethers.Event) {
+  private async handleChequeUpdated(_event: ethers.EventLog) {
     // Destructure but ignore unused variables with empty slots
     // const [chequeId, status] = _event.args!;
     // Update cheque status in database
@@ -169,7 +169,7 @@ export class EventListener {
     // TODO: Implement database update when schema is finalized
   }
 
-  private async handleDisputeOpened(event: ethers.Event) {
+  private async handleDisputeOpened(event: ethers.EventLog) {
     const [disputeId, chequeAddress, milestoneId] = event.args!;
     
     // Get dispute details from contract
@@ -189,7 +189,7 @@ export class EventListener {
     });
   }
 
-  private async handleDisputeResolved(_event: ethers.Event) {
+  private async handleDisputeResolved(_event: ethers.EventLog) {
     // Destructure but ignore unused variables with empty slots
     // const [disputeId, resolutionType] = _event.args!;
     // Update dispute status in database
@@ -197,7 +197,7 @@ export class EventListener {
     // TODO: Implement database update when schema is finalized
   }
 
-  private async handleObligationRegistered(event: ethers.Event) {
+  private async handleObligationRegistered(event: ethers.EventLog) {
     const [obligationId, , oracleAddress] = event.args!;
     await db.createOracleData({
       obligation_hash: obligationId,
@@ -207,7 +207,7 @@ export class EventListener {
     });
   }
 
-  private async handleObligationVerified(event: ethers.Event) {
+  private async handleObligationVerified(event: ethers.EventLog) {
     // Destructure but ignore unused variables with empty slots
     const [, ] = event.args!;
     // Optionally persist verification outcome; current schema stores oracle_data only

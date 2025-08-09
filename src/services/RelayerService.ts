@@ -121,11 +121,11 @@ export class RelayerService extends EventEmitter {
   private l1Bridge: ethers.Contract;
   private l2Bridge: ethers.Contract;
   private nativeBridge: ethers.Contract;
-  private isRunning: boolean = false;
+  private isRunning = false;
   private pendingWithdrawals: Map<string, WithdrawalEvent> = new Map();
   private processedDeposits: Set<string> = new Set();
   private merkleTree: SimpleMerkleTree | null = null;
-  private lastMerkleUpdate: number = 0;
+  private lastMerkleUpdate = 0;
 
   // Contract ABIs (simplified)
   private readonly BRIDGE_ABI = [
@@ -233,9 +233,9 @@ export class RelayerService extends EventEmitter {
       token: string,
       depositor: string,
       recipient: string,
-      amount: ethers.BigNumber,
+      amount: bigint,
       blockNumber: number,
-      event: ethers.Event
+      event: any
     ) => {
       await this.handleDepositEvent({
         type: 'DEPOSIT',
@@ -258,9 +258,9 @@ export class RelayerService extends EventEmitter {
       depositId: string,
       depositor: string,
       recipient: string,
-      amount: ethers.BigNumber,
+      amount: bigint,
       blockNumber: number,
-      event: ethers.Event
+      event: any
     ) => {
       await this.handleDepositEvent({
         type: 'DEPOSIT',
@@ -269,7 +269,7 @@ export class RelayerService extends EventEmitter {
         timestamp: Date.now(),
         data: {
           depositId,
-          token: ethers.constants.AddressZero, // Native token
+          token: ethers.ZeroAddress, // Native token
           depositor,
           recipient,
           amount: amount.toString(),
@@ -283,9 +283,9 @@ export class RelayerService extends EventEmitter {
       withdrawalId: string,
       token: string,
       recipient: string,
-      amount: ethers.BigNumber,
+      amount: bigint,
       l2TxHash: string,
-      event: ethers.Event
+      event: any
     ) => {
       await this.handleWithdrawalEvent({
         type: 'WITHDRAWAL',
@@ -386,16 +386,16 @@ export class RelayerService extends EventEmitter {
       const { withdrawalId, token, recipient, amount, l2TxHash, isNative } = withdrawal.data;
       
       const leafData = isNative 
-        ? ethers.utils.solidityPack(
+        ? ethers.solidityPacked(
             ['string', 'bytes32', 'address', 'uint256', 'uint256', 'bytes32'],
             ['NATIVE_WITHDRAWAL', withdrawalId, recipient, amount, withdrawal.blockNumber, l2TxHash]
           )
-        : ethers.utils.solidityPack(
+        : ethers.solidityPacked(
             ['bytes32', 'address', 'address', 'uint256', 'uint256', 'bytes32'],
             [withdrawalId, token, recipient, amount, withdrawal.blockNumber, l2TxHash]
           );
       
-      return ethers.utils.keccak256(leafData);
+      return ethers.keccak256(leafData);
     });
 
     return new SimpleMerkleTree(leaves);
@@ -428,12 +428,12 @@ export class RelayerService extends EventEmitter {
       // Update root on both bridges
       const tx1 = await this.l1Bridge.updateMerkleRoot(newRoot, validatorSignatures, {
         gasLimit: this.config.gasLimit,
-        gasPrice: ethers.utils.parseUnits(this.config.gasPrice, 'gwei')
+        gasPrice: ethers.parseUnits(this.config.gasPrice, 'gwei')
       });
       
       const tx2 = await this.nativeBridge.updateMerkleRoot(newRoot, validatorSignatures, {
         gasLimit: this.config.gasLimit,
-        gasPrice: ethers.utils.parseUnits(this.config.gasPrice, 'gwei')
+        gasPrice: ethers.parseUnits(this.config.gasPrice, 'gwei')
       });
 
       await Promise.all([tx1.wait(), tx2.wait()]);
@@ -461,14 +461,14 @@ export class RelayerService extends EventEmitter {
     // In a real implementation, this would collect signatures from multiple validators
     // For now, we'll simulate with a single validator signature
     
-    const messageHash = ethers.utils.keccak256(
-      ethers.utils.solidityPack(
+    const messageHash = ethers.keccak256(
+      ethers.solidityPacked(
         ['string', 'bytes32', 'uint256'],
         ['UPDATE_ROOT', merkleRoot, Date.now()]
       )
     );
     
-    const signature = await this.l1Wallet.signMessage(ethers.utils.arrayify(messageHash));
+    const signature = await this.l1Wallet.signMessage(ethers.getBytes(messageHash));
     
     return [{
       validator: this.l1Wallet.address,
@@ -489,16 +489,16 @@ export class RelayerService extends EventEmitter {
     const { token, recipient, amount, l2TxHash, isNative } = withdrawal.data;
     
     const leafData = isNative 
-      ? ethers.utils.solidityPack(
+      ? ethers.solidityPacked(
           ['string', 'bytes32', 'address', 'uint256', 'uint256', 'bytes32'],
           ['NATIVE_WITHDRAWAL', withdrawalId, recipient, amount, withdrawal.blockNumber, l2TxHash]
         )
-      : ethers.utils.solidityPack(
+      : ethers.solidityPacked(
           ['bytes32', 'address', 'address', 'uint256', 'uint256', 'bytes32'],
           [withdrawalId, token, recipient, amount, withdrawal.blockNumber, l2TxHash]
         );
     
-    const leaf = ethers.utils.keccak256(leafData);
+    const leaf = ethers.keccak256(leafData);
     const proof = this.merkleTree.getProof(leaf);
     
     return proof;

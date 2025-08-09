@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 import {
   GovernanceToken,
   SmartChequeGovernor,
@@ -113,7 +113,7 @@ describe("Consensus and Security Implementation", function () {
     });
     
     it("Should calculate staking rewards correctly", async function () {
-      await governanceToken.connect(validator1).approve(governanceToken.address, VALIDATOR_STAKE);
+      await governanceToken.connect(validator1).approve(await governanceToken.getAddress(), VALIDATOR_STAKE);
       await governanceToken.connect(validator1).stake(VALIDATOR_STAKE);
       
       // Fast forward time
@@ -127,7 +127,7 @@ describe("Consensus and Security Implementation", function () {
     });
     
     it("Should allow claiming rewards", async function () {
-      await governanceToken.connect(validator1).approve(governanceToken.address, VALIDATOR_STAKE);
+      await governanceToken.connect(validator1).approve(await governanceToken.getAddress(), VALIDATOR_STAKE);
       await governanceToken.connect(validator1).stake(VALIDATOR_STAKE);
       
       // Fast forward time
@@ -146,11 +146,11 @@ describe("Consensus and Security Implementation", function () {
     beforeEach(async function () {
       // Setup validators with staked tokens
       for (const validator of [validator1, validator2, validator3]) {
-        await governanceToken.connect(validator).approve(validatorManager.address, VALIDATOR_STAKE);
+        await governanceToken.connect(validator).approve(await validatorManager.getAddress(), VALIDATOR_STAKE);
         await validatorManager.connect(validator).registerValidator(
           VALIDATOR_STAKE,
           ethers.encodeBytes32String("pubkey"),
-          `Validator ${validator.address.slice(-4)}`,
+          `Validator ${(await validator.getAddress()).slice(-4)}`,
           500 // 5% commission
         );
       }
@@ -176,7 +176,7 @@ describe("Consensus and Security Implementation", function () {
     });
     
     it("Should allow undelegation", async function () {
-      await governanceToken.connect(delegator).approve(validatorManager.address, DELEGATION_AMOUNT);
+      await governanceToken.connect(delegator).approve(await validatorManager.getAddress(), DELEGATION_AMOUNT);
       await validatorManager.connect(delegator).delegate(await validator1.getAddress(), DELEGATION_AMOUNT);
       
       const balanceBefore = await governanceToken.balanceOf(await delegator.getAddress());
@@ -187,7 +187,7 @@ describe("Consensus and Security Implementation", function () {
     });
     
     it("Should slash validators for misbehavior", async function () {
-      const validatorInfoBefore = await validatorManager.getValidatorInfo(validator1.address);
+      const validatorInfoBefore = await validatorManager.getValidatorInfo(await validator1.getAddress());
       
       await validatorManager.slashValidator(
         await validator1.getAddress(),
@@ -195,7 +195,7 @@ describe("Consensus and Security Implementation", function () {
         ethers.toUtf8Bytes("Evidence of double signing")
       );
       
-      const validatorInfoAfter = await validatorManager.getValidatorInfo(validator1.address);
+      const validatorInfoAfter = await validatorManager.getValidatorInfo(await validator1.getAddress());
       expect(validatorInfoAfter.stake).to.be.lt(validatorInfoBefore.stake);
       expect(validatorInfoAfter.totalSlashed).to.be.gt(0);
     });
@@ -219,7 +219,7 @@ describe("Consensus and Security Implementation", function () {
       
       await validatorManager.connect(validator1).unjailValidator();
       
-      const validatorInfo = await validatorManager.getValidatorInfo(validator1.address);
+      const validatorInfo = await validatorManager.getValidatorInfo(await validator1.getAddress());
       expect(validatorInfo.status).to.equal(1); // ACTIVE
     });
   });
@@ -228,11 +228,11 @@ describe("Consensus and Security Implementation", function () {
     beforeEach(async function () {
       // Setup validators
       for (const validator of [validator1, validator2, validator3]) {
-        await governanceToken.connect(validator).approve(validatorManager.address, VALIDATOR_STAKE);
+        await governanceToken.connect(validator).approve(await validatorManager.getAddress(), VALIDATOR_STAKE);
         await validatorManager.connect(validator).registerValidator(
           VALIDATOR_STAKE,
           ethers.encodeBytes32String("pubkey"),
-          `Validator ${validator.address.slice(-4)}`,
+          `Validator ${(await validator.getAddress()).slice(-4)}`,
           500
         );
       }
@@ -364,6 +364,10 @@ describe("Consensus and Security Implementation", function () {
       const receipts = [ethers.toUtf8Bytes("receipt1")];
       const merkleProofs = [ethers.toUtf8Bytes("proof1")];
       
+      // Approve and transfer challenge bond
+      const challengeBond = ethers.parseEther("1000");
+      await governanceToken.connect(challenger).approve(await consensusManager.getAddress(), challengeBond);
+      
       await expect(
         consensusManager.connect(challenger).submitFraudProof(
           blockHash,
@@ -382,7 +386,7 @@ describe("Consensus and Security Implementation", function () {
   describe("Governance", function () {
     beforeEach(async function () {
       // Setup governance token voting power
-      await governanceToken.connect(validator1).approve(governanceToken.address, VALIDATOR_STAKE);
+      await governanceToken.connect(validator1).approve(await governanceToken.getAddress(), VALIDATOR_STAKE);
       await governanceToken.connect(validator1).stake(VALIDATOR_STAKE);
       await governanceToken.connect(validator1).becomeValidator();
       
@@ -501,7 +505,7 @@ describe("Consensus and Security Implementation", function () {
       
       // Delegate to validator
       await governanceToken.connect(delegator).approve(await validatorManager.getAddress(), DELEGATION_AMOUNT);
-      await validatorManager.connect(delegator).delegate(validator1.address, DELEGATION_AMOUNT);
+      await validatorManager.connect(delegator).delegate(await validator1.getAddress(), DELEGATION_AMOUNT);
       
       // Propose and validate block
       const parentHash = ethers.keccak256(ethers.toUtf8Bytes("genesis"));
@@ -522,14 +526,14 @@ describe("Consensus and Security Implementation", function () {
       await validatorManager.recordBlockProduction(await validator1.getAddress(), 1);
       
       // Verify validator received rewards
-      const validatorInfo = await validatorManager.getValidatorInfo(validator1.address);
-      expect(validatorInfo.blockProducerAddress).to.equal(await validator1.getAddress());
+      const validatorInfo = await validatorManager.getValidatorInfo(await validator1.getAddress());
+      expect(validatorInfo.validator).to.equal(await validator1.getAddress());
     });
     
     it("Should handle governance proposal execution", async function () {
       // Setup voting power
-      await governanceToken.connect(validator1).approve(governanceToken.address, VALIDATOR_STAKE);
-      await governanceToken.connect(validator1).stake(VALIDATOR_STAKE);
+      await governanceToken.connect(validator1).approve(await governanceToken.getAddress(), VALIDATOR_STAKE);
+      await governanceToken.connect(validator1).delegate(await validator1.getAddress());
       
       // Grant necessary roles
       await timelockController.grantRole(

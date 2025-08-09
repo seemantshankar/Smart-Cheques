@@ -125,14 +125,15 @@ const DisputeManager = () => {
   const escalateToPanel = async (disputeId: string) => {
     if (!provider) return;
     try {
-      const contract = new ethers.Contract(
+      const signer = await provider.getSigner();
+      const disputeManagerContract = new ethers.Contract(
         import.meta.env.VITE_DISPUTE_MANAGER_ADDRESS!,
         [
           'function escalateDisputeToPanel(bytes32,bytes32) external',
         ],
-        provider.getSigner()
+        signer as any
       );
-      const tx = await contract.escalateDisputeToPanel(disputeId, ethers.ZeroHash);
+      const tx = await disputeManagerContract.escalateDisputeToPanel(disputeId, ethers.ZeroHash);
       await tx.wait();
       toast({ title: 'Escalated', description: 'Dispute escalated to panel', status: 'success' });
       fetchDisputes();
@@ -147,13 +148,14 @@ const DisputeManager = () => {
     try {
       setResolving(true);
 
+      const signer = await provider.getSigner();
       const disputeManagerContract = new ethers.Contract(
         import.meta.env.VITE_DISPUTE_MANAGER_ADDRESS!,
         [
           'function proposeResolution(uint256,uint8,uint256) returns (bool)',
           'function resolveDispute(uint256) returns (bool)'
         ],
-        provider.getSigner()
+        signer as any
       );
 
       // First propose resolution

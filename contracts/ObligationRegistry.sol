@@ -56,6 +56,10 @@ contract ObligationRegistry is
         uint8 newScore
     );
 
+    event MinimumOracleScoreUpdated(
+        uint8 newMinimumScore
+    );
+
     // Custom errors
     error InvalidOracleAddress();
     error OracleScoreTooLow();
@@ -176,7 +180,11 @@ contract ObligationRegistry is
         address oracle,
         uint8 newScore
     ) external onlyRole(ADMIN_ROLE) {
-        this.updateOracleScore(oracle, newScore);
+        if (oracle == address(0)) revert InvalidOracleAddress();
+        if (newScore > 100) revert InvalidOracleScore();
+
+        oracleScores[oracle] = newScore;
+        emit OracleScoreUpdated(oracle, newScore);
     }
 
     /**
@@ -188,6 +196,7 @@ contract ObligationRegistry is
     ) external onlyRole(ADMIN_ROLE) {
         if (newMinimumScore > 100) revert InvalidOracleScore();
         minimumOracleScore = newMinimumScore;
+        emit MinimumOracleScoreUpdated(newMinimumScore);
     }
 
     /**

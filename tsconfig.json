@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "es2020",
+    "target": "es2022",
     "module": "commonjs",
     "moduleResolution": "node",
     "strict": false,
@@ -10,6 +10,7 @@
     "declaration": true,
     "sourceMap": true,
     "skipLibCheck": true,
+    "lib": ["es2022"],
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
     "typeRoots": ["./node_modules/@types"]

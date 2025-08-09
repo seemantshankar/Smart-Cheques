@@ -1,6 +1,7 @@
 import { expect } from "chai";
-import { ethers, upgrades } from "hardhat";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import hre from "hardhat";
+const { ethers, upgrades } = hre;
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 import { Contract } from "ethers";
 
 describe("DisputeManager - Multi-Arbitrator Support", function () {
@@ -19,7 +20,7 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
     const PANEL_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PANEL_MANAGER_ROLE"));
     
     beforeEach(async function () {
-        [admin, buyer, seller, arbitrator1, arbitrator2, arbitrator3, arbitrator4, arbitrator5, panelManager] = await ethers.getSigners();
+        [admin, buyer, , arbitrator1, arbitrator2, arbitrator3, , , panelManager] = await ethers.getSigners();
         
         // Deploy a test ERC20 token
         const TokenFactory = await ethers.getContractFactory("MockERC20");
@@ -27,52 +28,47 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         await token.waitForDeployment();
         
         // Transfer tokens to buyer for testing
-        await token.transfer(buyer.target, ethers.parseEther("100"));
+        await (token as any).transfer(buyer.address, ethers.parseEther("100"));
         
         // Deploy DisputeManager
         const DisputeManagerFactory = await ethers.getContractFactory("DisputeManager");
-        disputeManager = await upgrades.deployProxy(DisputeManagerFactory, [admin.target], {
+        disputeManager = await upgrades.deployProxy(DisputeManagerFactory, [admin.address], {
             initializer: 'initialize'
         });
         await disputeManager.waitForDeployment();
         
         // Deploy ChequeFactory
         const ChequeFactoryFactory = await ethers.getContractFactory("ChequeFactory");
-        chequeFactory = await upgrades.deployProxy(ChequeFactoryFactory, [disputeManager.target, admin.target], {
+        chequeFactory = await upgrades.deployProxy(ChequeFactoryFactory, [await disputeManager.getAddress(), admin.address], {
             initializer: 'initialize'
         });
         await chequeFactory.waitForDeployment();
         
         // Deploy ChequeEscrow
         const ChequeEscrowFactory = await ethers.getContractFactory("ChequeEscrow");
-        chequeEscrow = await upgrades.deployProxy(ChequeEscrowFactory, [chequeFactory.target, disputeManager.target, admin.target], {
+        chequeEscrow = await upgrades.deployProxy(ChequeEscrowFactory, [await chequeFactory.getAddress(), await disputeManager.getAddress(), admin.address], {
             initializer: 'initialize'
         });
         await chequeEscrow.waitForDeployment();
         
         // Setup roles
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator1.target);
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator2.target);
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator3.target);
-        await disputeManager.grantRole(PANEL_MANAGER_ROLE, panelManager.target);
+        await (disputeManager as any).grantRole(ARBITRATOR_ROLE, arbitrator1.address);
+        await (disputeManager as any).grantRole(ARBITRATOR_ROLE, arbitrator2.address);
+        await (disputeManager as any).grantRole(ARBITRATOR_ROLE, arbitrator3.address);
+        await (disputeManager as any).grantRole(PANEL_MANAGER_ROLE, panelManager.address);
         const totalAmount = ethers.parseEther("50");
-        await token.connect(buyer).approve(await chequeEscrow.getAddress(), totalAmount);
-        await chequeEscrow.connect(buyer).lockFunds(await token.getAddress(), totalAmount);
-        // Grant roles to arbitrators
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator1.target);
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator2.target);
-        await disputeManager.grantRole(ARBITRATOR_ROLE, arbitrator3.target);
-        await disputeManager.grantRole(PANEL_MANAGER_ROLE, panelManager.target);
+        await (token as any).connect(buyer).approve(await chequeEscrow.getAddress(), totalAmount);
+        await (chequeEscrow as any).connect(buyer).lockFunds(await token.getAddress(), totalAmount);
     });
     
     describe("Panel Configuration", function () {
         it("Should allow panel manager to configure arbitrator panels", async function () {
             const panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
-            const arbitrators = [arbitrator1.target, arbitrator2.target, arbitrator3.target];
+            const arbitrators = [arbitrator1.address, arbitrator2.address, arbitrator3.address];
             const threshold = 2;
             
             await expect(
-                disputeManager.connect(panelManager).configurePanelArbitrators(
+                (disputeManager as any).connect(panelManager).configurePanelArbitrators(
                     panelId,
                     arbitrators,
                     threshold
@@ -80,7 +76,7 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             ).to.emit(disputeManager, "PanelConfigured")
              .withArgs(panelId, arbitrators, threshold);
             
-            const [configArbitrators, configThreshold, isActive] = await disputeManager.getPanelConfig(panelId);
+            const [configArbitrators, configThreshold, isActive] = await (disputeManager as any).getPanelConfig(panelId);
             expect(configArbitrators).to.deep.equal(arbitrators);
             expect(configThreshold).to.equal(threshold);
             expect(isActive).to.be.true;
@@ -88,11 +84,11 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         
         it("Should reject panel configuration with invalid threshold", async function () {
             const panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
-            const arbitrators = [arbitrator1.target, arbitrator2.target];
+            const arbitrators = [arbitrator1.address, arbitrator2.address];
             const threshold = 3; // Higher than number of arbitrators
             
             await expect(
-                disputeManager.connect(panelManager).configurePanelArbitrators(
+                (disputeManager as any).connect(panelManager).configurePanelArbitrators(
                     panelId,
                     arbitrators,
                     threshold
@@ -102,11 +98,11 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         
         it("Should reject panel configuration from non-panel manager", async function () {
             const panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
-            const arbitrators = [arbitrator1.target, arbitrator2.target];
+            const arbitrators = [arbitrator1.address, arbitrator2.address];
             const threshold = 2;
             
             await expect(
-                disputeManager.connect(buyer).configurePanelArbitrators(
+                (disputeManager as any).connect(buyer).configurePanelArbitrators(
                     panelId,
                     arbitrators,
                     threshold
@@ -121,7 +117,7 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         
         beforeEach(async function () {
             // Create a dispute
-            const tx = await disputeManager.connect(buyer).openDispute(
+            const tx = await (disputeManager as any).connect(buyer).openDispute(
                 await chequeEscrow.getAddress(),
                 0,
                 "Quality issues",
@@ -133,29 +129,29 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             
             // Configure a panel
             panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
-            await disputeManager.connect(panelManager).configurePanelArbitrators(
+            await (disputeManager as any).connect(panelManager).configurePanelArbitrators(
                 panelId,
-                [arbitrator1.target, arbitrator2.target, arbitrator3.target],
+                [arbitrator1.address, arbitrator2.address, arbitrator3.address],
                 2
             );
         });
         
         it("Should escalate dispute to multi-arbitrator panel", async function () {
             await expect(
-                disputeManager.connect(buyer).escalateDisputeToPanel(disputeId, panelId)
+                (disputeManager as any).connect(buyer).escalateDisputeToPanel(disputeId, panelId)
             ).to.emit(disputeManager, "PanelAssigned")
-             .withArgs(disputeId, [arbitrator1.target, arbitrator2.target, arbitrator3.target], 2);
+             .withArgs(disputeId, [arbitrator1.address, arbitrator2.address, arbitrator3.address], 2);
             
-            const [panel, requiredVotes] = await disputeManager.getDisputePanel(disputeId);
-            expect(panel).to.deep.equal([arbitrator1.target, arbitrator2.target, arbitrator3.target]);
+            const [panel, requiredVotes] = await (disputeManager as any).getDisputePanel(disputeId);
+            expect(panel).to.deep.equal([arbitrator1.address, arbitrator2.address, arbitrator3.address]);
             expect(requiredVotes).to.equal(2);
         });
         
         it("Should reject escalation to inactive panel", async function () {
-            await disputeManager.connect(panelManager).deactivatePanel(panelId);
+            await (disputeManager as any).connect(panelManager).deactivatePanel(panelId);
             
             await expect(
-                disputeManager.connect(buyer).escalateDisputeToPanel(disputeId, panelId)
+                (disputeManager as any).connect(buyer).escalateDisputeToPanel(disputeId, panelId)
             ).to.be.revertedWith("Panel not active");
         });
     });
@@ -165,11 +161,11 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         
         beforeEach(async function () {
             // Raise dispute on the escrow contract first
-            await chequeEscrow.connect(buyer).raiseDispute(0);
+            await (chequeEscrow as any).connect(buyer).raiseDispute(0);
             
             // Create and escalate dispute
-            const tx = await disputeManager.connect(buyer).openDispute(
-                chequeEscrow.address,
+            const tx = await (disputeManager as any).connect(buyer).openDispute(
+                await chequeEscrow.getAddress(),
                 0,
                 "Quality issues",
                 "0x1234"
@@ -178,29 +174,29 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             const event = receipt.events?.find((e: any) => e.event === "DisputeOpened");
             disputeId = event?.args?.disputeId;
             
-            const panelId = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("panel1"));
-            await disputeManager.connect(panelManager).configurePanelArbitrators(
+            const panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
+            await (disputeManager as any).connect(panelManager).configurePanelArbitrators(
                 panelId,
                 [arbitrator1.address, arbitrator2.address, arbitrator3.address],
                 2
             );
             
-            await disputeManager.connect(buyer).escalateDisputeToPanel(disputeId, panelId);
+            await (disputeManager as any).connect(buyer).escalateDisputeToPanel(disputeId, panelId);
         });
         
         it("Should allow arbitrators to submit votes", async function () {
             const ResolutionType = { None: 0, ReleaseFunds: 1, RefundBuyer: 2, PartialRelease: 3 };
             
             await expect(
-                disputeManager.connect(arbitrator1).submitArbitratorVote(
+                (disputeManager as any).connect(arbitrator1).submitArbitratorVote(
                     disputeId,
                     ResolutionType.ReleaseFunds,
                     0
                 )
             ).to.emit(disputeManager, "ArbitratorVoteSubmitted")
-             .withArgs(disputeId, arbitrator1.target, ResolutionType.ReleaseFunds, 0);
+             .withArgs(disputeId, arbitrator1.address, ResolutionType.ReleaseFunds, 0);
             
-            const [resolutionType, amount, hasVoted] = await disputeManager.getArbitratorVote(
+            const [resolutionType, amount, hasVoted] = await (disputeManager as any).getArbitratorVote(
                 disputeId,
                 arbitrator1.address
             );
@@ -213,7 +209,7 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             const ResolutionType = { None: 0, ReleaseFunds: 1, RefundBuyer: 2, PartialRelease: 3 };
             
             // First vote
-            await disputeManager.connect(arbitrator1).submitArbitratorVote(
+            await (disputeManager as any).connect(arbitrator1).submitArbitratorVote(
                 disputeId,
                 ResolutionType.ReleaseFunds,
                 0
@@ -221,7 +217,7 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             
             // Second vote (reaches quorum)
             await expect(
-                disputeManager.connect(arbitrator2).submitArbitratorVote(
+                (disputeManager as any).connect(arbitrator2).submitArbitratorVote(
                     disputeId,
                     ResolutionType.ReleaseFunds,
                     0
@@ -231,21 +227,21 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
              .and.to.emit(disputeManager, "DisputeResolved")
              .withArgs(disputeId, ResolutionType.ReleaseFunds, 0);
             
-            const [, , , , status] = await disputeManager.getDispute(disputeId);
+            const [, , , , status] = await (disputeManager as any).getDispute(disputeId);
             expect(status).to.equal(4); // DisputeStatus.Resolved
         });
         
         it("Should prevent double voting", async function () {
             const ResolutionType = { None: 0, ReleaseFunds: 1, RefundBuyer: 2, PartialRelease: 3 };
             
-            await disputeManager.connect(arbitrator1).submitArbitratorVote(
+            await (disputeManager as any).connect(arbitrator1).submitArbitratorVote(
                 disputeId,
                 ResolutionType.ReleaseFunds,
                 0
             );
             
             await expect(
-                disputeManager.connect(arbitrator1).submitArbitratorVote(
+                (disputeManager as any).connect(arbitrator1).submitArbitratorVote(
                     disputeId,
                     ResolutionType.RefundBuyer,
                     0
@@ -258,10 +254,10 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             
             // Grant arbitrator role to a new address but don't add to panel
             const [, , , , , , , newArbitrator] = await ethers.getSigners();
-            await disputeManager.grantRole(ARBITRATOR_ROLE, newArbitrator.address);
+            await (disputeManager as any).grantRole(ARBITRATOR_ROLE, newArbitrator.address);
             
             await expect(
-                disputeManager.connect(newArbitrator).submitArbitratorVote(
+                (disputeManager as any).connect(newArbitrator).submitArbitratorVote(
                     disputeId,
                     ResolutionType.ReleaseFunds,
                     0
@@ -275,8 +271,8 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
         
         beforeEach(async function () {
             // Create and escalate dispute
-            const tx = await disputeManager.connect(buyer).openDispute(
-                chequeEscrow.address,
+            const tx = await (disputeManager as any).connect(buyer).openDispute(
+                await chequeEscrow.getAddress(),
                 0,
                 "Quality issues",
                 "0x1234"
@@ -285,49 +281,49 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             const event = receipt.events?.find((e: any) => e.event === "DisputeOpened");
             disputeId = event?.args?.disputeId;
             
-            const panelId = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("panel1"));
-            await disputeManager.connect(panelManager).configurePanelArbitrators(
+            const panelId = ethers.keccak256(ethers.toUtf8Bytes("panel1"));
+            await (disputeManager as any).connect(panelManager).configurePanelArbitrators(
                 panelId,
                 [arbitrator1.address, arbitrator2.address, arbitrator3.address],
                 2
             );
             
-            await disputeManager.connect(buyer).escalateDisputeToPanel(disputeId, panelId);
+            await (disputeManager as any).connect(buyer).escalateDisputeToPanel(disputeId, panelId);
         });
         
         it("Should correctly count votes and calculate average amounts", async function () {
             const ResolutionType = { None: 0, ReleaseFunds: 1, RefundBuyer: 2, PartialRelease: 3 };
             
             // Submit votes with different amounts for partial release
-            await disputeManager.connect(arbitrator1).submitArbitratorVote(
+            await (disputeManager as any).connect(arbitrator1).submitArbitratorVote(
                 disputeId,
                 ResolutionType.PartialRelease,
-                ethers.utils.parseEther("0.3")
+                ethers.parseEther("0.3")
             );
             
-            await disputeManager.connect(arbitrator2).submitArbitratorVote(
+            await (disputeManager as any).connect(arbitrator2).submitArbitratorVote(
                 disputeId,
                 ResolutionType.PartialRelease,
-                ethers.utils.parseEther("0.5")
+                ethers.parseEther("0.5")
             );
             
             // Check vote counts
-            const [releaseFunds, refundBuyer, partialRelease] = await disputeManager.getDisputeVoteCounts(disputeId);
+            const [releaseFunds, refundBuyer, partialRelease] = await (disputeManager as any).getDisputeVoteCounts(disputeId);
             expect(releaseFunds).to.equal(0);
             expect(refundBuyer).to.equal(0);
             expect(partialRelease).to.equal(2);
             
             // The dispute should be resolved with average amount
-            const [, , , , , proposedResolution, proposedAmount] = await disputeManager.getDispute(disputeId);
+            const [, , , , , proposedResolution, proposedAmount] = await (disputeManager as any).getDispute(disputeId);
             expect(proposedResolution).to.equal(ResolutionType.PartialRelease);
-            expect(proposedAmount).to.equal(ethers.utils.parseEther("0.4")); // Average of 0.3 and 0.5
+            expect(proposedAmount).to.equal(ethers.parseEther("0.4")); // Average of 0.3 and 0.5
         });
     });
     
     describe("Backward Compatibility", function () {
         it("Should maintain legacy single arbitrator escalation", async function () {
-            const tx = await disputeManager.connect(buyer).openDispute(
-                chequeEscrow.address,
+            const tx = await (disputeManager as any).connect(buyer).openDispute(
+                await chequeEscrow.getAddress(),
                 0,
                 "Quality issues",
                 "0x1234"
@@ -337,11 +333,11 @@ describe("DisputeManager - Multi-Arbitrator Support", function () {
             const disputeId = event?.args?.disputeId;
             
             await expect(
-                disputeManager.connect(buyer).escalateDispute(disputeId, arbitrator1.address)
+                (disputeManager as any).connect(buyer).escalateDispute(disputeId, arbitrator1.address)
             ).to.emit(disputeManager, "DisputeEscalated")
              .withArgs(disputeId, arbitrator1.address);
             
-            const [, , , , , , , arbitrator] = await disputeManager.getDispute(disputeId);
+            const [, , , , , , , arbitrator] = await (disputeManager as any).getDispute(disputeId);
             expect(arbitrator).to.equal(arbitrator1.address);
         });
     });

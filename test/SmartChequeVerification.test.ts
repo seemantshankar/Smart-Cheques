@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 import { keccak256, toUtf8Bytes } from "ethers";
 
 describe("SmartChequeEscrow Verification Tests", function () {
@@ -23,14 +23,17 @@ describe("SmartChequeEscrow Verification Tests", function () {
     // Deploy mock ERC20 token
     const Token = await ethers.getContractFactory("MockERC20");
     token = await Token.deploy("Test Token", "TEST", totalAmount);
+    await token.waitForDeployment();
 
     // Deploy mock obligation registry
     const MockRegistry = await ethers.getContractFactory("MockObligationRegistry");
     mockRegistry = await MockRegistry.deploy();
+    await mockRegistry.waitForDeployment();
 
     // Deploy SmartChequeEscrow
     const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
     escrow = await SmartChequeEscrow.deploy();
+    await escrow.waitForDeployment();
 
     // Initialize escrow
     await escrow.initialize(
@@ -46,7 +49,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     // Transfer tokens to buyer and approve escrow
     await token.transfer(buyer.address, totalAmount);
-    await token.connect(buyer).approve(escrow.address, totalAmount);
+    await token.connect(buyer).approve(await escrow.getAddress(), totalAmount);
 
     // Lock funds
     await escrow.connect(buyer).lockFunds(token.address);
@@ -98,8 +101,9 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     it("should verify milestone when no obligation registry is set", async function () {
       // Create new escrow without obligation registry
+      const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
       const newEscrow = await SmartChequeEscrow.deploy();
-      await newEscrow.deployed();
+      await newEscrow.waitForDeployment();
 
       await newEscrow.initialize(
         buyer.address,
@@ -109,13 +113,13 @@ describe("SmartChequeEscrow Verification Tests", function () {
         [milestones[0].obligation]
       );
 
-      await token.connect(buyer).approve(newEscrow.address, totalAmount);
-      await newEscrow.connect(buyer).lockFunds(token.address);
+      await token.connect(buyer).approve(await newEscrow.getAddress(), totalAmount);
+      await (newEscrow as any).connect(buyer).lockFunds(await token.getAddress());
 
       const proof = toUtf8Bytes("proof");
       
       // Should succeed because no registry means automatic verification
-        await expect(newEscrow.connect(seller).completeMilestone(0, proof))
+        await expect((newEscrow as any).connect(seller).completeMilestone(0, proof))
         .to.emit(newEscrow, "MilestoneVerification")
         .withArgs(0, milestones[0].obligation, true, keccak256(proof));
     });
@@ -180,12 +184,13 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     it("should prevent completion when funds not locked", async function () {
       // Create new escrow without locking funds
+      const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
       const newEscrow = await SmartChequeEscrow.deploy();
-      await newEscrow.deployed();
+      await newEscrow.waitForDeployment();
 
       await newEscrow.initialize(
-        buyer.target,
-        seller.target,
+        buyer.address,
+        seller.address,
         totalAmount,
         [totalAmount],
         [milestones[0].obligation]
@@ -193,7 +198,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
       const proof = toUtf8Bytes("proof");
       
-      await expect(newEscrow.connect(seller).completeMilestone(0, proof))
+      await expect((newEscrow as any).connect(seller).completeMilestone(0, proof))
         .to.be.revertedWith("Funds not locked");
     });
 
@@ -220,7 +225,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
     });
 
     it("should handle large proof data", async function () {
-      const largeProof = ethers.utils.hexlify(ethers.utils.randomBytes(1000));
+      const largeProof = ethers.hexlify(ethers.randomBytes(1000));
       
       await expect(escrow.connect(seller).completeMilestone(0, largeProof))
         .to.emit(escrow, "MilestoneVerification")

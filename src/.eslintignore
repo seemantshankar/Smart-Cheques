@@ -1,0 +1,6 @@
+node_modules/
+dist/
+build/
+*.js
+tests/setup.js
+jest.config.js

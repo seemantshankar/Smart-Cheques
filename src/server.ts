@@ -83,7 +83,7 @@ const handleValidationErrors = (req: express.Request, res: express.Response, nex
 };
 
 // Routes
-app.get('/api/cheques', [query('address').isEthereumAddress()], handleValidationErrors, async (req, res) => {
+app.get('/api/cheques', [query('address').isEthereumAddress()], handleValidationErrors, async (req: Request, res: Response) => {
   try {
     const address = req.query.address as string | undefined;
 
@@ -116,7 +116,7 @@ app.get('/api/cheques', [query('address').isEthereumAddress()], handleValidation
 
         return {
           id: row.cheque_id, // expose on-chain cheque id to the client
-          address: chequeContract.target,
+          address: row.contract_address,
           buyer: row.buyer_address,
           seller: row.seller_address,
           totalAmount,
@@ -162,7 +162,7 @@ app.post('/api/cheques', createChequeValidation, handleValidationErrors, async (
   }
 });
 
-app.get('/api/cheques/:chequeId', async (req, res) => {
+app.get('/api/cheques/:chequeId', async (req: Request, res: Response) => {
   try {
     const chequeId = req.params.chequeId;
     const chequeAddress = await factoryContract.getChequeAddress(chequeId);
@@ -192,7 +192,7 @@ app.get('/api/cheques/:chequeId', async (req, res) => {
     try {
       // We infer current chainId via provider
       const network = await provider.getNetwork();
-      const chainId = network.chainId;
+      const chainId = Number(network.chainId);
       const chequeRow = await db.getChequeByChainAndChequeId(chainId, chequeId);
       if (chequeRow) {
         const milestoneRows = await db.getMilestonesByChequeId(chequeRow.id);
@@ -254,7 +254,7 @@ app.get('/api/cheques/:chequeId', async (req, res) => {
   }
 });
 
-app.post('/api/cheques/:chequeId/milestones/:milestoneId/complete', async (req, res) => {
+app.post('/api/cheques/:chequeId/milestones/:milestoneId/complete', async (req: Request, res: Response) => {
   try {
     const { chequeId, milestoneId } = req.params;
     const { proof } = req.body;
@@ -300,11 +300,11 @@ app.post('/api/cheques/:chequeId/metadata',
       const { milestones } = req.body as { milestones: Array<{ description: string; obligation: string }> };
 
       const network = await provider.getNetwork();
-      const chainId = network.chainId;
+      const chainId = Number(network.chainId);
 
       // Resolve on-chain cheque address and participants
       const chequeAddress = await factoryContract.getChequeAddress(chequeId);
-      if (chequeAddress === ethers.constants.AddressZero) {
+      if (chequeAddress === ethers.ZeroAddress) {
         return res.status(404).json({ success: false, error: 'Cheque not found' });
       }
 
@@ -364,7 +364,7 @@ app.post('/api/cheques/:chequeId/metadata',
   }
 );
 
-app.get('/api/disputes', [query('address').isEthereumAddress()], handleValidationErrors, async (req, res) => {
+app.get('/api/disputes', [query('address').isEthereumAddress()], handleValidationErrors, async (req: Request, res: Response) => {
   try {
     const address = req.query.address as string | undefined;
     const statusFilter = req.query.status as string | undefined; // optional
@@ -405,7 +405,7 @@ app.get('/api/disputes', [query('address').isEthereumAddress()], handleValidatio
   }
 });
 
-app.post('/api/disputes', disputesOpenValidation, handleValidationErrors, async (req, res) => {
+app.post('/api/disputes', disputesOpenValidation, handleValidationErrors, async (req: Request, res: Response) => {
   try {
     const { chequeAddress, milestoneId, reason, evidence } = req.body;
 
@@ -434,7 +434,7 @@ app.post('/api/disputes', disputesOpenValidation, handleValidationErrors, async 
   }
 });
 
-app.get('/api/disputes/:disputeId', async (req, res) => {
+app.get('/api/disputes/:disputeId', async (req: Request, res: Response) => {
   try {
     const { disputeId } = req.params;
     const dispute = await disputeManager.getDispute(disputeId);
@@ -538,11 +538,11 @@ function maybeCreateRelayerService(): RelayerService | null {
   }
 }
 
-app.get('/api/admin/relayer/status', (_req, res) => {
+app.get('/api/admin/relayer/status', (_req: Request, res: Response) => {
   if (!relayerService) return res.status(200).json({ enabled: false });
   return res.json({ enabled: true, status: relayerService.getStatus() });
 });
-app.post('/api/admin/relayer/start', async (_req, res) => {
+app.post('/api/admin/relayer/start', async (_req: Request, res: Response) => {
   try {
     if (!relayerService) {
       relayerService = maybeCreateRelayerService();
@@ -554,7 +554,7 @@ app.post('/api/admin/relayer/start', async (_req, res) => {
     res.status(500).json({ success: false, error: 'Failed to start relayer' });
   }
 });
-app.post('/api/admin/relayer/stop', async (_req, res) => {
+app.post('/api/admin/relayer/stop', async (_req: Request, res: Response) => {
   try {
     if (!relayerService) return res.json({ success: true });
     await relayerService.stop();
@@ -563,7 +563,7 @@ app.post('/api/admin/relayer/stop', async (_req, res) => {
     res.status(500).json({ success: false, error: 'Failed to stop relayer' });
   }
 });
-app.post('/api/admin/relayer/trigger', async (_req, res) => {
+app.post('/api/admin/relayer/trigger', async (_req: Request, res: Response) => {
   try {
     if (!relayerService) return res.status(400).json({ success: false, error: 'Relayer not configured' });
     await relayerService.triggerMerkleUpdate();
@@ -572,3 +572,6 @@ app.post('/api/admin/relayer/trigger', async (_req, res) => {
     res.status(500).json({ success: false, error: 'Failed to trigger update' });
   }
 });
+
+// Export app for testing
+export { app };

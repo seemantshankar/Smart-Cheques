@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { ConsensusManager, ValidatorManager, GovernanceToken } from "../typechain";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 
 describe("ConsensusManager Role Management", function () {
   let consensusManager: ConsensusManager;
@@ -35,26 +35,26 @@ describe("ConsensusManager Role Management", function () {
     await consensusManager.waitForDeployment();
 
     // Grant admin role to admin address
-    await consensusManager.grantRole(await consensusManager.ADMIN_ROLE(), admin.target);
+    await consensusManager.grantRole(await consensusManager.ADMIN_ROLE(), admin.address);
   });
 
   describe("Oracle Role Management", function () {
     it("Should allow admin to grant oracle role", async function () {
-      await expect(consensusManager.connect(admin).grantOracleRole(oracle1.target))
-        .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.target, admin.target);
+      await expect(consensusManager.connect(admin).grantOracleRole(oracle1.address))
+      .to.emit(consensusManager, "RoleGranted")
+      .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.address, admin.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.target)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.address)).to.be.true;
     });
 
     it("Should allow admin to revoke oracle role", async function () {
-      await consensusManager.connect(admin).grantOracleRole(oracle1.target);
-      
-      await expect(consensusManager.connect(admin).revokeOracleRole(oracle1.target))
-        .to.emit(consensusManager, "RoleRevoked")
-        .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.target, admin.target);
+      await consensusManager.connect(admin).grantOracleRole(oracle1.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.target)).to.be.false;
+    await expect(consensusManager.connect(admin).revokeOracleRole(oracle1.address))
+      .to.emit(consensusManager, "RoleRevoked")
+      .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.address, admin.address);
+
+    expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.address)).to.be.false;
     });
 
     it("Should not allow non-admin to grant oracle role", async function () {
@@ -72,21 +72,21 @@ describe("ConsensusManager Role Management", function () {
 
   describe("Validator Role Management", function () {
     it("Should allow admin to grant validator role", async function () {
-      await expect(consensusManager.connect(admin).grantValidatorRole(validator1.target))
-        .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.target, admin.target);
+      await expect(consensusManager.connect(admin).grantValidatorRole(validator1.address))
+      .to.emit(consensusManager, "RoleGranted")
+      .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.address, admin.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.target)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.address)).to.be.true;
     });
 
     it("Should allow admin to revoke validator role", async function () {
-      await consensusManager.connect(admin).grantValidatorRole(validator1.target);
-      
-      await expect(consensusManager.connect(admin).revokeValidatorRole(validator1.target))
-        .to.emit(consensusManager, "RoleRevoked")
-        .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.target, admin.target);
+      await consensusManager.connect(admin).grantValidatorRole(validator1.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.target)).to.be.false;
+    await expect(consensusManager.connect(admin).revokeValidatorRole(validator1.address))
+      .to.emit(consensusManager, "RoleRevoked")
+      .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.address, admin.address);
+
+    expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.address)).to.be.false;
     });
 
     it("Should not allow non-admin to grant validator role", async function () {
@@ -104,21 +104,21 @@ describe("ConsensusManager Role Management", function () {
 
   describe("Sequencer Role Management", function () {
     it("Should allow admin to grant sequencer role", async function () {
-      await expect(consensusManager.connect(admin).grantSequencerRole(sequencer1.target))
-        .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.target, admin.target);
+      await expect(consensusManager.connect(admin).grantSequencerRole(sequencer1.address))
+      .to.emit(consensusManager, "RoleGranted")
+      .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.address, admin.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.target)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.address)).to.be.true;
     });
 
     it("Should allow admin to revoke sequencer role", async function () {
-      await consensusManager.connect(admin).grantSequencerRole(sequencer1.target);
-      
-      await expect(consensusManager.connect(admin).revokeSequencerRole(sequencer1.target))
-        .to.emit(consensusManager, "RoleRevoked")
-        .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.target, admin.target);
+      await consensusManager.connect(admin).grantSequencerRole(sequencer1.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.target)).to.be.false;
+    await expect(consensusManager.connect(admin).revokeSequencerRole(sequencer1.address))
+      .to.emit(consensusManager, "RoleRevoked")
+      .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.address, admin.address);
+
+    expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.address)).to.be.false;
     });
 
     it("Should not allow non-admin to grant sequencer role", async function () {
@@ -142,21 +142,21 @@ describe("ConsensusManager Role Management", function () {
 
       await expect(consensusManager.connect(owner).batchSetupRoles(oracles, validators, sequencers))
         .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.target, owner.target)
-        .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.target, owner.target)
-        .to.emit(consensusManager, "RoleGranted")
-        .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.target, owner.target);
+        .withArgs(await consensusManager.ORACLE_ROLE(), oracle1.address, owner.address)
+      .to.emit(consensusManager, "RoleGranted")
+      .withArgs(await consensusManager.VALIDATOR_ROLE(), validator1.address, owner.address)
+      .to.emit(consensusManager, "RoleGranted")
+      .withArgs(await consensusManager.SEQUENCER_ROLE(), sequencer1.address, owner.address);
 
-      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.target)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.address)).to.be.true;
     });
 
     it("Should revert when batch setup exceeds oracle limit", async function () {
-      const oracles = Array(21).fill(ethers.Wallet.createRandom().target);
-      const validators = [validator1.target];
-      const sequencers = [sequencer1.target];
+      const oracles = Array(21).fill(ethers.Wallet.createRandom().address);
+    const validators = [validator1.address];
+    const sequencers = [sequencer1.address];
 
       await expect(
         consensusManager.connect(owner).batchSetupRoles(oracles, validators, sequencers)
@@ -164,9 +164,9 @@ describe("ConsensusManager Role Management", function () {
     });
 
     it("Should revert when batch setup exceeds validator limit", async function () {
-      const oracles = [oracle1.target];
-      const validators = Array(51).fill(ethers.Wallet.createRandom().target);
-      const sequencers = [sequencer1.target];
+      const oracles = [oracle1.address];
+    const validators = Array(51).fill(ethers.Wallet.createRandom().address);
+    const sequencers = [sequencer1.address];
 
       await expect(
         consensusManager.connect(owner).batchSetupRoles(oracles, validators, sequencers)
@@ -174,9 +174,9 @@ describe("ConsensusManager Role Management", function () {
     });
 
     it("Should revert when batch setup exceeds sequencer limit", async function () {
-      const oracles = [oracle1.target];
-      const validators = [validator1.target];
-      const sequencers = Array(11).fill(ethers.Wallet.createRandom().target);
+      const oracles = [oracle1.address];
+    const validators = [validator1.address];
+    const sequencers = Array(11).fill(ethers.Wallet.createRandom().address);
 
       await expect(
         consensusManager.connect(owner).batchSetupRoles(oracles, validators, sequencers)
@@ -184,18 +184,18 @@ describe("ConsensusManager Role Management", function () {
     });
 
     it("Should skip zero addresses in batch setup", async function () {
-      const oracles = [oracle1.target, ethers.ZeroAddress, oracle2.target];
-      const validators = [validator1.target, ethers.ZeroAddress, validator2.target];
-      const sequencers = [sequencer1.target, ethers.ZeroAddress, sequencer2.target];
+      const oracles = [oracle1.address, ethers.ZeroAddress, oracle2.address];
+    const validators = [validator1.address, ethers.ZeroAddress, validator2.address];
+    const sequencers = [sequencer1.address, ethers.ZeroAddress, sequencer2.address];
 
       await consensusManager.connect(owner).batchSetupRoles(oracles, validators, sequencers);
 
-      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle2.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator2.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.target)).to.be.true;
-      expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer2.target)).to.be.true;
+      expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle1.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.ORACLE_ROLE(), oracle2.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator1.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.VALIDATOR_ROLE(), validator2.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer1.address)).to.be.true;
+    expect(await consensusManager.hasRole(await consensusManager.SEQUENCER_ROLE(), sequencer2.address)).to.be.true;
     });
   });
 });

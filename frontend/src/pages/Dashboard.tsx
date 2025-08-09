@@ -33,7 +33,7 @@ const Dashboard = () => {
   const [stats, setStats] = useState({
     totalCheques: 0,
     activeCheques: 0,
-    totalValue: 0n
+    totalValue: BigInt(0)
   });
 
   const cardBg = useColorModeValue('white', 'gray.700');
@@ -53,7 +53,7 @@ const Dashboard = () => {
           const active = data.cheques.filter((c: Cheque) => c.status === '1').length;
           const totalValue = data.cheques.reduce(
             (acc: bigint, c: Cheque) => acc + BigInt(c.totalAmount),
-            0n
+            BigInt(0)
           );
 
           setStats({

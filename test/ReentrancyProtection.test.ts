@@ -1,7 +1,8 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { Contract, Signer } from "ethers";
 import hre from "hardhat";
+const { ethers, upgrades } = hre;
+import { Contract } from "ethers";
+import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers.js";
 
 describe("Reentrancy Protection Tests", function () {
     let erc20Bridge: Contract;
@@ -9,62 +10,66 @@ describe("Reentrancy Protection Tests", function () {
     let obligationRegistry: Contract;
     let maliciousToken: Contract;
     let mockERC20: Contract;
-    let owner: Signer;
-    let attacker: Signer;
-    let user: Signer;
+    let owner: HardhatEthersSigner;
+    let attacker: HardhatEthersSigner;
+    let user: HardhatEthersSigner;
 
     beforeEach(async function () {
         [owner, attacker, user] = await ethers.getSigners();
 
         // Deploy MockERC20
-        const MockERC20 = await ethers.getContractFactory("MockERC20");
-        mockERC20 = await MockERC20.deploy("Test Token", "TEST", ethers.utils.parseEther("1000000"));
-        await mockERC20.deployed();
+        const MockERC20 = await ethers.getContractFactory("contracts/mocks/MockERC20.sol:MockERC20");
+        mockERC20 = await MockERC20.deploy("Test Token", "TEST", ethers.parseEther("1000000"));
+        await mockERC20.waitForDeployment();
 
         // Deploy MaliciousToken
         const MaliciousToken = await ethers.getContractFactory("MaliciousToken");
         maliciousToken = await MaliciousToken.deploy();
-        await maliciousToken.deployed();
+        await maliciousToken.waitForDeployment();
 
         // Deploy ERC20Bridge using upgrades plugin
         const ERC20Bridge = await ethers.getContractFactory("ERC20Bridge");
-        erc20Bridge = await hre.upgrades.deployProxy(ERC20Bridge, [
+        erc20Bridge = await upgrades.deployProxy(ERC20Bridge, [
             await owner.getAddress(),
-            ethers.utils.parseEther("1000") // min validator stake
+            ethers.parseEther("1000") // min validator stake
         ], {
             initializer: "initialize",
             kind: "uups"
         });
-        await erc20Bridge.deployed();
+        await erc20Bridge.waitForDeployment();
 
         // Deploy DisputeManager using upgrades plugin
         const DisputeManager = await ethers.getContractFactory("DisputeManager");
-        disputeManager = await hre.upgrades.deployProxy(DisputeManager, {
+        disputeManager = await upgrades.deployProxy(DisputeManager, [
+            await owner.getAddress(), // admin
+            await owner.getAddress(), // arbitrator
+            await owner.getAddress()  // panelManager
+        ], {
             initializer: "initialize",
             kind: "uups"
         });
-        await disputeManager.deployed();
+        await disputeManager.waitForDeployment();
 
         // Deploy ObligationRegistry using upgrades plugin
         const ObligationRegistry = await ethers.getContractFactory("ObligationRegistry");
-        obligationRegistry = await hre.upgrades.deployProxy(ObligationRegistry, {
+        obligationRegistry = await upgrades.deployProxy(ObligationRegistry, [], {
             initializer: "initialize",
             kind: "uups"
         });
-        await obligationRegistry.deployed();
+        await obligationRegistry.waitForDeployment();
 
         // Setup malicious token
-        await maliciousToken.setBridge(erc20Bridge.address);
+        await maliciousToken.setBridge(await erc20Bridge.getAddress());
         await maliciousToken.setAttacker(await attacker.getAddress());
         
         // Add malicious token as supported (for testing purposes)
         await erc20Bridge.addTokenMapping(
-            maliciousToken.address,
-            maliciousToken.address
+            await maliciousToken.getAddress(),
+            await maliciousToken.getAddress()
         );
         
         // Transfer tokens to attacker
-        await maliciousToken.transfer(await attacker.getAddress(), ethers.utils.parseEther("1000"));
+        await maliciousToken.transfer(await attacker.getAddress(), ethers.parseEther("1000"));
     });
 
     describe("ERC20Bridge Reentrancy Protection", function () {
@@ -72,15 +77,15 @@ describe("Reentrancy Protection Tests", function () {
             const attackerAddress = await attacker.getAddress();
             
             // Approve tokens for bridge
-            await maliciousToken.connect(attacker).approve(erc20Bridge.address, ethers.utils.parseEther("100"));
+            await (maliciousToken as any).connect(attacker).approve(await erc20Bridge.getAddress(), ethers.parseEther("100"));
             
             // Enable attack mode on malicious token
             await maliciousToken.enableAttack();
             
             // Attempt deposit with malicious token - should succeed but reentrancy should be prevented
-            const tx = await erc20Bridge.connect(attacker).depositToken(
-                maliciousToken.address,
-                ethers.utils.parseEther("100"),
+            const tx = await (erc20Bridge as any).connect(attacker).depositToken(
+                await maliciousToken.getAddress(),
+                ethers.parseEther("100"),
                 attackerAddress
             );
             
@@ -100,7 +105,7 @@ describe("Reentrancy Protection Tests", function () {
             await obligationRegistry.updateOracleScore(oracleAddress, 80);
             
             // Register an obligation
-            const obligationHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test obligation"));
+            const obligationHash = ethers.keccak256(ethers.toUtf8Bytes("test obligation"));
             const oracleFunction = "0x12345678"; // Mock function selector
             const parameters = "0x";
             

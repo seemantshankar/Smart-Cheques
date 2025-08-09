@@ -146,6 +146,14 @@ contract DisputeManager is
         uint256 averageAmount
     );
 
+    event VoteCountingFinalized(
+        bytes32 indexed disputeId,
+        ResolutionType winningResolution,
+        uint256 totalAmount,
+        uint256 voteCount,
+        uint256 averageAmount
+    );
+
     // Custom Errors
     error InvalidChequeContract();
     error OnlyParticipantAllowed();
@@ -686,16 +694,24 @@ contract DisputeManager is
     function _finalizeDisputeResolution(bytes32 disputeId, ResolutionType winningResolution) internal {
         Dispute storage dispute = disputes[disputeId];
         
-        // Calculate average amount for the winning resolution
+        // Calculate deterministic rounded average amount for the winning resolution
         uint256 totalAmount = resolutionAmountSum[disputeId][winningResolution];
         uint256 voteCount = resolutionVoteCounts[disputeId][winningResolution];
-        uint256 averageAmount = voteCount > 0 ? totalAmount / voteCount : 0;
+        
+        // Deterministic rounding: add half the divisor before division
+        // This ensures consistent rounding behavior across all nodes
+        uint256 averageAmount = voteCount > 0 ? (totalAmount + (voteCount / 2)) / voteCount : 0;
+        
+        // Assertions for vote counting integrity
+        assert(voteCount >= dispute.requiredVotes); // Quorum must be reached
+        assert(totalAmount >= averageAmount); // Average cannot exceed any individual vote
         
         // Update dispute state
         dispute.proposedResolution = winningResolution;
         dispute.proposedAmount = averageAmount;
         dispute.status = DisputeStatus.ResolutionProposed;
         
+        emit VoteCountingFinalized(disputeId, winningResolution, totalAmount, voteCount, averageAmount);
         emit QuorumReached(disputeId, winningResolution, averageAmount);
         emit ResolutionProposed(disputeId, winningResolution, averageAmount);
         

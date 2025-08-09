@@ -16,6 +16,7 @@ import {ValidatorManager} from "./ValidatorManager.sol";
  */
 contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     using ECDSA for bytes32;
+    using SafeERC20 for IERC20;
     
     // Custom errors
     error InvalidBlockNumber();
@@ -32,14 +33,18 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     error ChallengeNotFound();
     error InvalidChallengeState();
     error UnauthorizedAccess();
+    error ArrayTooLarge();
     error InvalidTimestamp();
     error InvalidStateRoot();
     error InvalidTransactionsRoot();
     error InvalidReceiptsRoot();
     error InvalidGasLimit();
-    error InvalidDifficulty();
+    error ExtraDataTooLong();
+    error AlreadyVoted();
     error BlockTooOld();
     error InvalidValidatorSet();
+    error InsufficientChallengeBond();
+    error InvalidMerkleProof();
     
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -85,8 +90,10 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes[] merkleProofs;
         address challenger;
         uint256 timestamp;
+        uint256 bondAmount;
         bool verified;
         bool resolved;
+        bytes externalEncodedProof;
     }
     
     // Checkpoint structure
@@ -95,7 +102,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes32 blockHash;
         bytes32 stateRoot;
         uint256 timestamp;
-        uint256 validatorSetHash;
+        bytes32 validatorSetHash;
         bool finalized;
     }
     
@@ -107,10 +114,12 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         uint256 checkpointInterval; // blocks
         uint256 maxBlockSize; // 1MB
         uint256 baseGasLimit;
+        uint256 challengeBond; // Required bond for fraud proofs
     }
 
     // State variables
     ValidatorManager public immutable VALIDATOR_MANAGER;
+    IERC20 public immutable GOVERNANCE_TOKEN;
 
     mapping(uint256 => BlockHeader) private blockHeaders;
     mapping(bytes32 => BlockValidation) private blockValidations;
@@ -118,6 +127,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     mapping(uint256 => Checkpoint) private checkpoints;
     mapping(address => uint256) public lastProposedBlock;
     mapping(bytes32 => bool) public processedTransactions;
+    mapping(bytes32 => uint256) private blockNumberByHash;
+
 
     uint256 public currentBlockNumber;
     uint256 public lastFinalizedBlock;
@@ -164,8 +175,14 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes32 stateRoot
     );
     
-    constructor(address _validatorManager) public {
+    event ChainReverted(
+        uint256 indexed revertToBlock,
+        uint256 indexed previousBlock
+    );
+    
+    constructor(address _validatorManager, address _governanceToken) {
         VALIDATOR_MANAGER = ValidatorManager(_validatorManager);
+        GOVERNANCE_TOKEN = IERC20(_governanceToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(SEQUENCER_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
@@ -181,7 +198,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             challengePeriod: 7 days,
             checkpointInterval: 256, // blocks
             maxBlockSize: 1000000, // 1MB
-            baseGasLimit: 30000000
+            baseGasLimit: 30000000,
+            challengeBond: 1000 * 10**18 // 1000 tokens required for challenge bond
         });
     }
     
@@ -203,7 +221,20 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes memory extraData
     ) external onlyRole(SEQUENCER_ROLE) whenNotPaused {
         if (gasUsed > consensusConfig.baseGasLimit) revert InvalidGasLimit();
-        if (extraData.length > 32) revert InvalidDifficulty();
+        if (extraData.length > 32) revert ExtraDataTooLong();
+        // For block 1, parentHash should be genesis hash (keccak256("genesis"))
+        // For subsequent blocks, parentHash must match the previous block hash
+        if (currentBlockNumber == 0) {
+            // First block after genesis, parentHash should be genesis hash
+            if (parentHash != keccak256("genesis")) {
+                revert InvalidParentHash();
+            }
+        } else {
+            bytes32 expectedParentHash = _calculateBlockHash(blockHeaders[currentBlockNumber]);
+            if (parentHash != expectedParentHash) {
+                revert InvalidParentHash();
+            }
+        }
         if (block.timestamp < lastProposedBlock[msg.sender] + consensusConfig.blockTime) revert InvalidTimestamp();
         
         uint256 newBlockNumber = currentBlockNumber + 1;
@@ -227,6 +258,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         
         // Store block header
         blockHeaders[newBlockNumber] = header;
+        blockNumberByHash[blockHash] = newBlockNumber;
         
         // Initialize block validation
         BlockValidation storage validation = blockValidations[blockHash];
@@ -251,11 +283,12 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         external 
         onlyRole(VALIDATOR_ROLE) 
         whenNotPaused 
+        nonReentrant 
     {
         BlockValidation storage validation = blockValidations[blockHash];
         if (validation.blockHash == bytes32(0)) revert BlockNotFound();
         if (validation.finalized) revert BlockAlreadyFinalized();
-        if (validation.validatorVotes[msg.sender]) revert UnauthorizedAccess();
+        if (validation.validatorVotes[msg.sender]) revert AlreadyVoted();
         if (block.timestamp > validation.challengeDeadline) revert InvalidChallengePeriod();
         
         // Verify signature
@@ -289,8 +322,12 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes32 stateTransition,
         bytes[] memory transactions,
         bytes[] memory receipts,
-        bytes[] memory merkleProofs
-    ) external whenNotPaused {
+        bytes[] memory merkleProofs,
+        bytes memory externalEncodedProof
+    ) external whenNotPaused nonReentrant {
+        if (transactions.length > 1000) revert ArrayTooLarge();
+        if (receipts.length > 1000) revert ArrayTooLarge();
+        if (merkleProofs.length > 1000) revert ArrayTooLarge();
         BlockValidation storage validation = blockValidations[blockHash];
         if (validation.blockHash == bytes32(0)) revert BlockNotFound();
         if (validation.finalized) revert BlockAlreadyFinalized();
@@ -300,6 +337,13 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         // Verify caller has sufficient stake
         (uint256 callerStake, bool isActive) = VALIDATOR_MANAGER.getValidatorStake(msg.sender);
         if (callerStake == 0 || !isActive) revert UnauthorizedAccess();
+        
+        // Transfer challenge bond to escrow
+        uint256 bondAmount = consensusConfig.challengeBond;
+        if (GOVERNANCE_TOKEN.balanceOf(msg.sender) < bondAmount) revert InsufficientChallengeBond();
+        
+        // Transfer challenge bond to escrow
+        GOVERNANCE_TOKEN.safeTransferFrom(msg.sender, address(this), bondAmount);
 
         // Mark as challenged and extend challenge window
         validation.challenged = true;
@@ -315,9 +359,13 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             merkleProofs: merkleProofs,
             challenger: msg.sender,
             timestamp: block.timestamp,
+            bondAmount: bondAmount,
             verified: false,
-            resolved: false
+            resolved: false,
+            externalEncodedProof: externalEncodedProof
         });
+        
+
         
         emit FraudProofSubmitted(blockHash, msg.sender, stateTransition);
     }
@@ -326,7 +374,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @dev Verify a fraud proof
      * @param blockHash Hash of the challenged block
      */
-    function verifyFraudProof(bytes32 blockHash) external onlyRole(ORACLE_ROLE) whenNotPaused {
+    function verifyFraudProof(bytes32 blockHash) external onlyRole(ORACLE_ROLE) whenNotPaused nonReentrant {
+
         FraudProof storage proof = fraudProofs[blockHash];
         if (proof.blockHash == bytes32(0)) revert InvalidFraudProof();
         if (proof.verified) revert InvalidFraudProof();
@@ -338,44 +387,74 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
 
         // Verify the fraud proof (simplified - in production would need full verification)
         bool isValid = _verifyStateTransition(
+            blockHash,
             proof.stateTransition,
             proof.transactions,
             proof.receipts,
             proof.merkleProofs
         );
         
+
+        
         proof.verified = isValid;
         proof.resolved = true;
         
+        // Store challenger address before any operations that might delete the proof
+        address challengerAddr = proof.challenger;
+        
+        // Get challenge bond amount from per-block storage
+        uint256 bondAmount = proof.bondAmount;
         if (isValid) {
             // Fraud proven - slash the block proposer
             BlockHeader memory header = _getBlockByHash(blockHash);
             VALIDATOR_MANAGER.slashValidator(
                 header.proposer,
                 ValidatorManager.SlashingReason.INVALID_BLOCK,
-                abi.encode(proof)
+                proof.externalEncodedProof
             );
             
-            // Revert to previous state
+            // Refund challenge bond to successful challenger
+            if (bondAmount > 0) {
+                GOVERNANCE_TOKEN.safeTransfer(challengerAddr, bondAmount);
+            }
+            
+            // Revert to previous state (this will delete the fraud proof)
+            // Note: We preserve the fraud proof verification status before reverting
             _revertToBlock(header.blockNumber - 1);
             
-            // Reward the challenger
-            (uint256 challengerStake, bool challengerActive) = VALIDATOR_MANAGER.getValidatorStake(proof.challenger);
-            if (challengerStake > 0 && challengerActive) {
-                // Transfer reward to challenger
-                IERC20 governanceToken = IERC20(address(VALIDATOR_MANAGER.governanceToken()));
-                SafeERC20.safeTransfer(governanceToken, proof.challenger, challengerStake / 10);
-            }
+            // Re-store the fraud proof with verified status for historical record
+            fraudProofs[blockHash] = FraudProof({
+                blockHash: blockHash,
+                stateTransition: proof.stateTransition,
+                transactions: proof.transactions,
+                receipts: proof.receipts,
+                merkleProofs: proof.merkleProofs,
+                challenger: challengerAddr,
+                timestamp: proof.timestamp,
+                bondAmount: proof.bondAmount,
+                verified: true,
+                resolved: true,
+                externalEncodedProof: proof.externalEncodedProof
+            });
         } else {
             // Fraud proof invalid - slash the challenger
             VALIDATOR_MANAGER.slashValidator(
-                proof.challenger,
+                challengerAddr,
                 ValidatorManager.SlashingReason.MALICIOUS_BEHAVIOR,
-                abi.encode(proof)
+                abi.encode(proof.blockHash, proof.challenger, proof.timestamp, proof.stateTransition)
             );
+            
+            // Forfeit challenge bond (keep it in contract)
+            if (bondAmount > 0) {
+                // Bond is forfeited - kept in contract
+            }
+            
+            // Clear fraud proof state after processing
+            delete fraudProofs[blockHash];
         }
         
-        emit FraudProofVerified(blockHash, isValid, proof.challenger);
+
+        emit FraudProofVerified(blockHash, isValid, challengerAddr);
     }
     
     /**
@@ -394,7 +473,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             blockHash: _calculateBlockHash(header),
             stateRoot: header.stateRoot,
             timestamp: block.timestamp,
-            validatorSetHash: uint256(validatorSetHash),
+            validatorSetHash: validatorSetHash,
             finalized: true
         });
         
@@ -427,7 +506,8 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function _calculateRequiredValidators() internal view returns (uint256) {
         address[] memory activeValidators = VALIDATOR_MANAGER.getActiveValidators();
-        return (activeValidators.length * consensusConfig.validationThreshold) / 100;
+        uint256 required = (activeValidators.length * consensusConfig.validationThreshold + 99) / 100; // Ceiling division
+        return required == 0 ? 1 : required; // Ensure at least 1 validator required
     }
     
     /**
@@ -457,32 +537,112 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @return Block header
      */
     function _getBlockByHash(bytes32 blockHash) internal view returns (BlockHeader memory) {
-        for (uint256 i = 1; i <= currentBlockNumber; i++) {
-            if (_calculateBlockHash(blockHeaders[i]) == blockHash) {
-                return blockHeaders[i];
-            }
-        }
-        revert BlockNotFound();
+        uint256 blockNumber = blockNumberByHash[blockHash];
+        if (blockNumber == 0) revert BlockNotFound();
+        return blockHeaders[blockNumber];
     }
     
     /**
-     * @dev Verify state transition (simplified)
+     * @dev Verify Merkle proof for a leaf against a root
+     * @param leaf The leaf to verify
+     * @param root The Merkle root
+     * @param proof Array of sibling hashes for the proof
+     * @return True if the proof is valid
+     */
+    function _verifyMerkleProof(bytes32 leaf, bytes32 root, bytes32[] memory proof) internal pure returns (bool) {
+        bytes32 computed = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            if (computed < proof[i]) {
+                computed = keccak256(abi.encodePacked(computed, proof[i]));
+            } else {
+                computed = keccak256(abi.encodePacked(proof[i], computed));
+            }
+        }
+        return computed == root;
+    }
+
+    /**
+     * @dev Verify state transition with proper Merkle proof verification
+     * @param blockHash Hash of the block being challenged
      * @param stateTransition State transition hash
      * @param transactions Transaction data
      * @param receipts Receipt data
-     * @param merkleProofs Merkle proofs
-     * @return True if valid
+     * @param merkleProofs Merkle proofs (flattened array of proof hashes)
+     * @return True if fraud is proven (i.e., block data is incorrect)
      */
     function _verifyStateTransition(
+        bytes32 blockHash,
         bytes32 stateTransition,
         bytes[] memory transactions,
         bytes[] memory receipts,
         bytes[] memory merkleProofs
-    ) internal pure returns (bool) {
-        // Simplified verification - in production would need full EVM execution
-        return keccak256(abi.encode(transactions, receipts, merkleProofs)) == stateTransition;
+    ) internal view returns (bool) {
+        // Get the block header to compare against
+        BlockHeader memory header = _getBlockByHash(blockHash);
+        
+        // Basic validation: check if we have matching counts
+        if (transactions.length != receipts.length) {
+            return true; // Fraud proven - mismatched transaction/receipt counts
+        }
+        
+        // Verify transactions against transactionsRoot
+        bytes32 calculatedTxRoot = _calculateMerkleRoot(transactions);
+        if (calculatedTxRoot != header.transactionsRoot) {
+            return true; // Fraud proven - transactions don't match claimed root
+        }
+        
+        // Verify receipts against receiptsRoot
+        bytes32 calculatedReceiptRoot = _calculateMerkleRoot(receipts);
+        if (calculatedReceiptRoot != header.receiptsRoot) {
+            return true; // Fraud proven - receipts don't match claimed root
+        }
+        
+        // Verify state transition hash consistency
+        // The stateTransition should be the hash of the new state root after processing transactions
+        bytes32 expectedStateTransition = keccak256(abi.encode(
+            header.blockNumber,
+            header.stateRoot,
+            calculatedTxRoot,
+            calculatedReceiptRoot
+        ));
+        
+        // Fraud is proven if state transition doesn't match expected format
+        return stateTransition != expectedStateTransition;
     }
     
+    /**
+     * @dev Calculate Merkle root from array of data
+     * @param data Array of bytes data to calculate root from
+     * @return Merkle root
+     */
+    function _calculateMerkleRoot(bytes[] memory data) internal pure returns (bytes32) {
+        if (data.length == 0) {
+            return bytes32(0);
+        }
+        
+        bytes32[] memory hashes = new bytes32[](data.length);
+        for (uint256 i = 0; i < data.length; i++) {
+            hashes[i] = keccak256(data[i]);
+        }
+        
+        // Build Merkle tree
+        uint256 n = hashes.length;
+        while (n > 1) {
+            uint256 j = 0;
+            for (uint256 i = 0; i < n; i += 2) {
+                if (i + 1 < n) {
+                    hashes[j] = keccak256(abi.encodePacked(hashes[i], hashes[i + 1]));
+                } else {
+                    hashes[j] = hashes[i]; // Handle odd number of leaves
+                }
+                j++;
+            }
+            n = j;
+        }
+        
+        return hashes[0];
+    }
+
     /**
      * @dev Calculate validator set hash
      * @return Validator set hash
@@ -499,9 +659,68 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     function _revertToBlock(uint256 blockNumber) internal {
         if (blockNumber >= currentBlockNumber) revert InvalidBlockNumber();
         
+        // Limit the number of blocks that can be reverted to prevent unbounded loops
+        uint256 maxRevertBlocks = 1000;
+        uint256 blocksToRevert = currentBlockNumber - blockNumber;
+        if (blocksToRevert > maxRevertBlocks) revert ArrayTooLarge();
+        
+        // Clear all blocks after the revert point
+        for (uint256 i = blockNumber + 1; i <= currentBlockNumber; i++) {
+            bytes32 blockHash = _calculateBlockHash(blockHeaders[i]);
+            
+            // Clear block data
+            delete blockHeaders[i];
+            
+            // Clear BlockValidation struct with mapping members
+            BlockValidation storage validation = blockValidations[blockHash];
+            if (validation.blockHash != bytes32(0)) {
+                // Reset struct fields manually since it contains mappings
+                validation.blockHash = bytes32(0);
+                validation.validatorCount = 0;
+                validation.requiredValidators = 0;
+                // Note: mapping members (validatorVotes, validatorSignatures) cannot be cleared
+                // but will be inaccessible once the struct is reset
+                validation.finalized = false;
+                validation.finalizedAt = 0;
+                validation.challenged = false;
+                validation.challenger = address(0);
+                validation.challengeDeadline = 0;
+            }
+            
+            delete blockNumberByHash[blockHash];
+            
+            // Clear any pending fraud proofs for these blocks
+            // Note: FraudProof struct doesn't contain mappings, but being explicit
+            if (fraudProofs[blockHash].challenger != address(0)) {
+                fraudProofs[blockHash] = FraudProof({
+                blockHash: bytes32(0),
+                stateTransition: bytes32(0),
+                transactions: new bytes[](0),
+                receipts: new bytes[](0),
+                merkleProofs: new bytes[](0),
+                challenger: address(0),
+                timestamp: 0,
+                bondAmount: 0,
+                verified: false,
+                resolved: false,
+                externalEncodedProof: new bytes(0)
+            });
+            }
+        }
+        
+        // Store previous block number before updating
+        uint256 previousBlockNumber = currentBlockNumber;
+        
+        // Update chain state
         currentBlockNumber = blockNumber;
         currentStateRoot = blockHeaders[blockNumber].stateRoot;
-        lastFinalizedBlock = blockNumber;
+        
+        // Only update lastFinalizedBlock if we're reverting past it
+        if (lastFinalizedBlock > blockNumber) {
+            lastFinalizedBlock = blockNumber;
+        }
+        
+        emit ChainReverted(blockNumber, previousBlockNumber);
     }
     
     // View functions

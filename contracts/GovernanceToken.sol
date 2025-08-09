@@ -46,6 +46,7 @@ contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, Ownable, Pausable, R
     constructor() 
         ERC20("Smart Cheque Governance Token", "SCGT")
         ERC20Permit("Smart Cheque Governance Token")
+        Ownable()
     {
         _mint(msg.sender, INITIAL_SUPPLY);
     }
