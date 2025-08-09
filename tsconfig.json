@@ -3,15 +3,18 @@
     "target": "es2020",
     "module": "commonjs",
     "moduleResolution": "node",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "outDir": "dist",
     "declaration": true,
     "sourceMap": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["./scripts", "./test", "./typechain"],
-  "files": ["./hardhat.config.ts"]
+  "include": ["./scripts", "./test"],
+  "exclude": ["node_modules", "dist", "artifacts", "cache", "typechain"],
+  "files": ["./hardhat.config.cjs"]
 }

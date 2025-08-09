@@ -1,12 +1,11 @@
-import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-ethers";
-import "@nomicfoundation/hardhat-chai-matchers";
-import "@nomiclabs/hardhat-etherscan";
-import "@openzeppelin/hardhat-upgrades";
-import "@typechain/hardhat";
-import "hardhat-gas-reporter";
-import "solidity-coverage";
-import * as dotenv from "dotenv";
+require("@nomicfoundation/hardhat-ethers");
+require("@nomicfoundation/hardhat-chai-matchers");
+require("@nomiclabs/hardhat-etherscan");
+require("@openzeppelin/hardhat-upgrades");
+require("@typechain/hardhat");
+require("hardhat-gas-reporter");
+require("solidity-coverage");
+const dotenv = require("dotenv");
 
 dotenv.config();
 
@@ -24,6 +23,15 @@ const config = {
       },
       {
         version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.8.24",
         settings: {
           optimizer: {
             enabled: true,
@@ -62,6 +70,6 @@ const config = {
   mocha: {
     timeout: 100000
   }
-} as HardhatUserConfig;
+};
 
-export default config;
+module.exports = config;
