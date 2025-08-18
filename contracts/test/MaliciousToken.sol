@@ -40,6 +40,9 @@ contract MaliciousToken is ERC20 {
         address to,
         uint256 amount
     ) public override returns (bool) {
+        if (shouldAttack) {
+            revert("MaliciousToken: transferFrom attack simulated");
+        }
         // Perform the normal transfer first
         bool success = super.transferFrom(from, to, amount);
         

@@ -2,7 +2,8 @@
 // Integration Test: End-to-End Escrow Flow
 
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import hre from "hardhat";
+const { ethers, upgrades } = hre;
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 import { MockERC20, SimpleEscrow } from "../../typechain";
 

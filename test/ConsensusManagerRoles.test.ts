@@ -1,5 +1,6 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import hre from "hardhat";
+const { ethers, upgrades } = hre;
 import { ConsensusManager, ValidatorManager, GovernanceToken } from "../typechain";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 

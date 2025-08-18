@@ -1,5 +1,6 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import hre from "hardhat";
+const { ethers } = hre;
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 import { keccak256, toUtf8Bytes } from "ethers";
 
@@ -21,17 +22,17 @@ describe("SmartChequeEscrow Verification Tests", function () {
     [buyer, seller] = await ethers.getSigners();
 
     // Deploy mock ERC20 token
-    const Token = await ethers.getContractFactory("MockERC20");
+    const Token = await ethers.getContractFactory("contracts/mocks/MockERC20.sol:MockERC20");
     token = await Token.deploy("Test Token", "TEST", totalAmount);
     await token.waitForDeployment();
 
     // Deploy mock obligation registry
-    const MockRegistry = await ethers.getContractFactory("MockObligationRegistry");
+    const MockRegistry = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
     mockRegistry = await MockRegistry.deploy();
     await mockRegistry.waitForDeployment();
 
     // Deploy SmartChequeEscrow
-    const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
+    const SmartChequeEscrow = await ethers.getContractFactory("contracts/SmartChequeEscrow.sol:SmartChequeEscrow");
     escrow = await SmartChequeEscrow.deploy();
     await escrow.waitForDeployment();
 
@@ -53,7 +54,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     // Lock funds
     await escrow.connect(buyer).lockFunds(token.address);
-  });
+  })
 
   describe("Milestone Verification via Obligation Registry", function () {
     it("should verify milestone when obligation is already verified", async function () {
@@ -101,7 +102,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     it("should verify milestone when no obligation registry is set", async function () {
       // Create new escrow without obligation registry
-      const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
+      const SmartChequeEscrow = await ethers.getContractFactory("contracts/SmartChequeEscrow.sol:SmartChequeEscrow");
       const newEscrow = await SmartChequeEscrow.deploy();
       await newEscrow.waitForDeployment();
 
@@ -184,7 +185,7 @@ describe("SmartChequeEscrow Verification Tests", function () {
 
     it("should prevent completion when funds not locked", async function () {
       // Create new escrow without locking funds
-      const SmartChequeEscrow = await ethers.getContractFactory("SmartChequeEscrow");
+      const SmartChequeEscrow = await ethers.getContractFactory("contracts/SmartChequeEscrow.sol:SmartChequeEscrow");
       const newEscrow = await SmartChequeEscrow.deploy();
       await newEscrow.waitForDeployment();
 

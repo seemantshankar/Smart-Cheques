@@ -1,5 +1,6 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import hre from "hardhat";
+const { ethers, upgrades } = hre;
 import { parseEther } from "ethers";
 
 describe("Simple Test", function () {
@@ -8,7 +9,7 @@ describe("Simple Test", function () {
     });
 
     it("should deploy MockERC20", async function () {
-        const MockERC20 = await ethers.getContractFactory("MockERC20");
+        const MockERC20 = await ethers.getContractFactory("contracts/mocks/MockERC20.sol:MockERC20");
         const mockERC20 = await MockERC20.deploy("Test Token", "TEST", parseEther("1000000"));
         await mockERC20.waitForDeployment();
         

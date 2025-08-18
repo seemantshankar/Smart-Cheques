@@ -15,7 +15,7 @@
     "allowJs": true,
     "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["./scripts", "./test"],
-  "exclude": ["node_modules", "dist", "artifacts", "cache", "typechain"],
+  "include": ["./scripts", "./test", "./typechain"],
+  "exclude": ["node_modules", "dist", "artifacts", "cache"],
   "files": ["./hardhat.config.cjs"]
 }

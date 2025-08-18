@@ -59,8 +59,10 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
   let token: Contract;
   let escrow: Contract;
   let chainId: bigint;
+  let mockRegistry: Contract;
 
   beforeEach(async () => {
+    // obligationRegistry must be set before locking funds
     [buyer, seller, other] = await ethers.getSigners();
 
     token = await ethers.getContractFactory("contracts/test/MockERC20.sol:MockERC20").then(f => f.deploy("Test Token", "TEST", ethers.parseEther("1000000")));
@@ -74,11 +76,17 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
 
     chainId = BigInt((await ethers.provider.getNetwork()).chainId);
 
+    // Deploy mock obligation registry
+    const MockRegistry = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
+    const mockRegistry = await MockRegistry.deploy();
+    await mockRegistry.waitForDeployment();
+
     // fund buyer and approve
     await (token as any).mint(await buyer.getAddress(), 1000n);
     await (token as any).connect(buyer).approve(await escrow.getAddress(), 1000n);
 
-    // lock funds
+    // set obligation registry and lock funds
+    await (escrow as any).connect(buyer).setObligationRegistry(await mockRegistry.getAddress());
     await (escrow as any).connect(buyer).lockFunds(await token.getAddress());
 
     // enable OffChainSigned and set signer
@@ -159,6 +167,13 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
     );
     await freshEscrow.waitForDeployment();
     await (token as any).connect(buyer).approve(await freshEscrow.getAddress(), 1500n);
+    
+    // Deploy new mock registry for fresh escrow
+    const FreshRegistry = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
+    const freshRegistry = await FreshRegistry.deploy();
+    await freshRegistry.waitForDeployment();
+    
+    await (freshEscrow as any).connect(buyer).setObligationRegistry(await freshRegistry.getAddress());
     await (freshEscrow as any).connect(buyer).lockFunds(await token.getAddress());
     await (freshEscrow as any).connect(buyer).setAuthorizationMode(1);
     await (freshEscrow as any).connect(buyer).setSigner(await buyer.getAddress());
@@ -242,5 +257,88 @@ describe("SmartChequeEscrow - OffChainSigned", function () {
     await expect(
       (escrow as any).completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
     ).to.be.revertedWithCustomError(escrow, "OffChainSignedDisabled");
+  });
+
+  it("reverts lockFunds if obligationRegistry is not set", async () => {
+    const escrowNoRegistry = await upgrades.deployProxy(
+      await ethers.getContractFactory("SmartChequeEscrow"),
+      [await buyer.getAddress(), await seller.getAddress(), 1000n, [500n, 500n], [ethers.ZeroHash, ethers.ZeroHash]],
+      { initializer: "initialize" }
+    );
+    await escrowNoRegistry.waitForDeployment();
+    await (token as any).connect(buyer).approve(await escrowNoRegistry.getAddress(), 1000n);
+    await expect(
+      (escrowNoRegistry as any).connect(buyer).lockFunds(await token.getAddress())
+    ).to.be.reverted;
+  });
+
+  it("does not increase releasedAmount if token transfer fails", async () => {
+    const MaliciousToken = await ethers.getContractFactory("contracts/test/MaliciousToken.sol:MaliciousToken");
+    const maliciousToken = await MaliciousToken.deploy();
+    await maliciousToken.waitForDeployment();
+    const escrowMal = await upgrades.deployProxy(
+      await ethers.getContractFactory("SmartChequeEscrow"),
+      [await buyer.getAddress(), await seller.getAddress(), 1000n, [1000n], [ethers.ZeroHash]],
+      { initializer: "initialize" }
+    );
+    await escrowMal.waitForDeployment();
+    await (maliciousToken as any).transfer(await buyer.getAddress(), 1000n);
+    await (maliciousToken as any).connect(buyer).approve(await escrowMal.getAddress(), 1000n);
+    const MockRegistry = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
+    const mockRegistry = await MockRegistry.deploy();
+    await mockRegistry.waitForDeployment();
+    await (escrowMal as any).connect(buyer).setObligationRegistry(await mockRegistry.getAddress());
+    await (escrowMal as any).connect(buyer).lockFunds(await maliciousToken.getAddress());
+    await (escrowMal as any).connect(buyer).setAuthorizationMode(1);
+    await (escrowMal as any).connect(buyer).setSigner(await buyer.getAddress());
+    // Enable attack to simulate transfer failure
+    await (maliciousToken as any).enableAttack();
+    const escrowId = ethers.hexlify(ethers.randomBytes(32));
+    const deadline = (await ethers.provider.getBlock("latest"))!.timestamp + 3600;
+    const sig = await signAuth(
+      buyer,
+      escrowMal,
+      chainId,
+      escrowId,
+      0,
+      1000n,
+      await seller.getAddress(),
+      deadline
+    );
+    // Expect transfer to revert and releasedAmount to remain zero
+    await expect(
+      (escrowMal as any).completeMilestoneWithSignature(escrowId, 0, await seller.getAddress(), deadline, sig)
+    ).to.be.reverted;
+    expect(await escrowMal.releasedAmount()).to.equal(0n);
+  });
+  
+  it("updates releasedAmount and completedMilestones correctly after dispute resolution", async () => {
+    // Setup escrow with 2 milestones
+    const escrowDispute = await upgrades.deployProxy(
+      await ethers.getContractFactory("SmartChequeEscrow"),
+      [await buyer.getAddress(), await seller.getAddress(), 1000n, [500n, 500n], [ethers.ZeroHash, ethers.ZeroHash]],
+      { initializer: "initialize" }
+    );
+    await escrowDispute.waitForDeployment();
+    await (token as any).connect(buyer).approve(await escrowDispute.getAddress(), 1000n);
+    const MockRegistry = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
+    const mockRegistry = await MockRegistry.deploy();
+    await mockRegistry.waitForDeployment();
+    await (escrowDispute as any).connect(buyer).setObligationRegistry(await mockRegistry.getAddress());
+    await (escrowDispute as any).connect(buyer).lockFunds(await token.getAddress());
+    await (escrowDispute as any).connect(buyer).setAuthorizationMode(1);
+    await (escrowDispute as any).connect(buyer).setSigner(await buyer.getAddress());
+    // Raise dispute for milestone 0
+    await (escrowDispute as any).connect(buyer).raiseDispute(0);
+    // Resolve dispute, release funds to seller
+    await (escrowDispute as any).connect(buyer).grantRole(await escrowDispute.DISPUTE_MANAGER_ROLE(), await buyer.getAddress());
+    await (escrowDispute as any).connect(buyer).resolveDispute(0, true);
+    expect(await escrowDispute.releasedAmount()).to.equal(500n);
+    expect(await escrowDispute.completedMilestones()).to.equal(1);
+    // Raise and resolve dispute for milestone 1, refund to buyer
+    await (escrowDispute as any).connect(buyer).raiseDispute(1);
+    await (escrowDispute as any).connect(buyer).resolveDispute(1, false);
+    expect(await escrowDispute.releasedAmount()).to.equal(1000n);
+    expect(await escrowDispute.completedMilestones()).to.equal(2);
   });
 });

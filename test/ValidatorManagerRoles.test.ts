@@ -1,4 +1,5 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+const { ethers } = hre;
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers.js";
 
 describe("ValidatorManagerRoles", function () {

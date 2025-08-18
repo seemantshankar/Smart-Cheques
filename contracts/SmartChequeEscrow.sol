@@ -34,11 +34,13 @@ contract SmartChequeEscrow is
     error InvalidRecipient();
     error InvalidSignature();
     error AuthorizationAlreadyUsed();
-    error VerificationInProgress();
     error NoDisputeRaised();
     error AmountExceedsMilestone();
     error FundsAlreadyLocked();
     error InvalidTotalAmount();
+    error InvalidTokenAddress();
+    error RegistryNotSet();
+    error ArrayLengthMismatch();
     error DisputeAlreadyRaised();
     error AlreadyFinalized();
     error NotBuyerOrSeller();
@@ -56,12 +58,14 @@ contract SmartChequeEscrow is
     address public buyer;
     address public seller;
     uint256 public totalAmount;
+    uint256 public releasedAmount;
     IERC20Upgradeable public token;
     
     Milestone[] public milestones;
     
     bool public isLocked;
     bool public isFinalized;
+    uint256 public completedMilestones;
 
     // Roles
     bytes32 public constant DISPUTE_MANAGER_ROLE = keccak256("DISPUTE_MANAGER_ROLE");
@@ -76,22 +80,25 @@ contract SmartChequeEscrow is
     // Replay protection mapping: cheque/escrow id + milestone index => consumed
     mapping(bytes32 => bool) public consumedAuthorizations;
     
-    // Replay / verification protection
-    mapping(uint256 => bool) private _verifyingMilestone;
 
 
-    event FundsLocked(address indexed buyer, uint256 amount);
+
+    event FundsLocked(address indexed buyer, address indexed token, uint256 amount);
     event MilestoneCompleted(uint256 indexed milestoneIndex, uint256 amount);
     event MilestoneVerification(uint256 indexed milestoneIndex, bytes32 indexed obligationId, bool success, bytes32 proofHash);
     event DisputeRaised(uint256 indexed milestoneIndex, address initiator);
     event DisputeResolved(uint256 indexed milestoneIndex, bool releaseFunds);
     event FundsReleased(address indexed seller, uint256 amount);
     event FundsRefunded(address indexed buyer, uint256 amount);
+    event ObligationRegistryUpdated(address indexed registry);
+    event DisputeManagerGranted(address indexed disputeManager);
+    event DisputeManagerRevoked(address indexed disputeManager);
 
     // OffChainSigned events
     event AuthorizationModeUpdated(AuthorizationMode mode);
     event SignerUpdated(address indexed signer);
     event AuthorizationConsumed(bytes32 indexed authHash, uint256 indexed milestoneIndex);
+    event EscrowFinalized(uint256 totalReleased, uint256 remainingFunds);
 
     modifier onlyBuyer() {
         if (msg.sender != buyer) revert OnlyBuyer();
@@ -109,7 +116,7 @@ contract SmartChequeEscrow is
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() public {
+    constructor() {
         _disableInitializers();
     }
 
@@ -123,6 +130,15 @@ contract SmartChequeEscrow is
         __ReentrancyGuard_init();
         __EIP712_init("SmartChequeEscrow", "1");
         __AccessControl_init();
+
+        if (_milestoneAmounts.length != _obligations.length) revert ArrayLengthMismatch();
+        if (_milestoneAmounts.length > 100) revert("Too many milestones");
+        
+        uint256 sum = 0;
+        for (uint256 i = 0; i < _milestoneAmounts.length; i++) {
+            sum += _milestoneAmounts[i];
+        }
+        if (sum != _totalAmount) revert InvalidTotalAmount();
 
         buyer = _buyer;
         seller = _seller;
@@ -143,6 +159,7 @@ contract SmartChequeEscrow is
         isFinalized = false;
         authorizationMode = AuthorizationMode.None;
         signer = address(0);
+        completedMilestones = 0;
 
         // Grant roles
         _grantRole(DEFAULT_ADMIN_ROLE, _buyer);
@@ -160,6 +177,7 @@ contract SmartChequeEscrow is
      * @dev Set the off-chain signer address. Only buyer may change.
      */
     function setSigner(address _signer) external onlyBuyer {
+        if (_signer == address(0)) revert InvalidTokenAddress();
         signer = _signer;
         emit SignerUpdated(_signer);
     }
@@ -170,7 +188,9 @@ contract SmartChequeEscrow is
      */
     function lockFunds(address _token) external onlyBuyer nonReentrant {
         if (isLocked) revert FundsAlreadyLocked();
-        if (_token == address(0)) revert InvalidTotalAmount();
+        if (_token == address(0)) revert InvalidTokenAddress();
+        if (totalAmount == 0) revert InvalidTotalAmount();
+        if (obligationRegistry == address(0)) revert RegistryNotSet();
 
         token = IERC20Upgradeable(_token);
         
@@ -178,7 +198,7 @@ contract SmartChequeEscrow is
         token.safeTransferFrom(buyer, address(this), totalAmount);
         
         isLocked = true;
-        emit FundsLocked(buyer, totalAmount);
+        emit FundsLocked(buyer, _token, totalAmount);
     }
 
     /**
@@ -214,29 +234,21 @@ contract SmartChequeEscrow is
 
 
 
-    function _verifyMilestone(uint256 milestoneIndex, bytes calldata proof ) internal returns (bool) {
-        if (_verifyingMilestone[milestoneIndex]) revert VerificationInProgress();
+    function _verifyMilestone(uint256 milestoneIndex) internal view returns (bool) {
+        if (milestoneIndex >= milestones.length) revert InvalidMilestoneIndex();
         
-        _verifyingMilestone[milestoneIndex] = true;
-
         bytes32 obligationId = milestones[milestoneIndex].obligationHash;
-        bool success = _safeVerifyObligation(obligationId);
         
-        emit MilestoneVerification(milestoneIndex, obligationId, success, keccak256(proof));
-        
-        _verifyingMilestone[milestoneIndex] = false;
-        return success;
+        // Check verification status (view-only call)
+        return _safeVerifyObligation(obligationId);
     }
 
-    function _safeVerifyObligation(bytes32 obligationId) internal returns (bool) {
-        if (obligationRegistry == address(0)) return true;
+    function _safeVerifyObligation(bytes32 obligationId) private view returns (bool) {
+        if (obligationRegistry == address(0)) return false; // or revert RegistryNotSet();
         
         IObligationRegistry reg = IObligationRegistry(obligationRegistry);
         (, , , , bool isVerified, ) = reg.getObligation(obligationId);
-        
-        if (isVerified) return true;
-        
-        return reg.verifyObligation(obligationId);
+        return isVerified;
     }
 
     /**
@@ -252,25 +264,27 @@ contract SmartChequeEscrow is
         Milestone storage milestone = milestones[milestoneIndex];
         if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
         if (milestone.isDisputed) revert MilestoneDisputed();
-        if (!_verifyMilestone(milestoneIndex, proof)) revert InvalidSignature();
+        
+        bytes32 obligationId = milestones[milestoneIndex].obligationHash;
+        bool verified = _verifyMilestone(milestoneIndex);
+        if (!verified) revert InvalidSignature();
 
         milestone.isCompleted = true;
 
+        // Check available funds
+        require(releasedAmount + milestone.amount <= totalAmount, "Insufficient funds");
         // Release funds for this milestone
         token.safeTransfer(seller, milestone.amount);
+        releasedAmount += milestone.amount;
 
         emit MilestoneCompleted(milestoneIndex, milestone.amount);
+        emit MilestoneVerification(milestoneIndex, obligationId, verified, keccak256(proof));
+        completedMilestones++;
 
-        // Finalize if all milestones are completed
-        bool allCompleted = true;
-        for (uint256 i = 0; i < milestones.length; i++) {
-            if (!milestones[i].isCompleted) {
-                allCompleted = false;
-                break;
-            }
-        }
-        if (allCompleted) {
+        // Optimized check for all milestones completed
+        if (completedMilestones == milestones.length) {
             isFinalized = true;
+            emit EscrowFinalized(releasedAmount, totalAmount - releasedAmount);
         }
     }
 
@@ -303,18 +317,30 @@ contract SmartChequeEscrow is
 
         Milestone storage milestone = milestones[milestoneIndex];
 
+        // Check available funds
+        require(releasedAmount + milestone.amount <= totalAmount, "Insufficient funds");
         if (releaseFunds) {
             milestone.isCompleted = true;
             milestone.isDisputed = false;
             token.safeTransfer(seller, milestone.amount);
+            releasedAmount += milestone.amount;
             emit FundsReleased(seller, milestone.amount);
         } else {
+            milestone.isCompleted = true; // Mark as completed to prevent re-use
             milestone.isDisputed = false;
             token.safeTransfer(buyer, milestone.amount);
+            releasedAmount += milestone.amount;
             emit FundsRefunded(buyer, milestone.amount);
         }
 
         emit DisputeResolved(milestoneIndex, releaseFunds);
+
+        // Optimized check for all milestones completed
+        completedMilestones++;
+        if (completedMilestones == milestones.length) {
+            isFinalized = true;
+            emit EscrowFinalized(releasedAmount, totalAmount - releasedAmount);
+        }
     }
 
     /**
@@ -329,34 +355,70 @@ contract SmartChequeEscrow is
         if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
         if (amountToSeller > milestone.amount) revert AmountExceedsMilestone();
 
+        // Check available funds
+        require(releasedAmount + milestone.amount <= totalAmount, "Insufficient funds");
+
         milestone.isDisputed = false;
-        milestone.isCompleted = amountToSeller == milestone.amount;
+        milestone.isCompleted = true;
 
         if (amountToSeller > 0) {
             token.safeTransfer(seller, amountToSeller);
+            releasedAmount += amountToSeller;
             emit FundsReleased(seller, amountToSeller);
         }
         uint256 refund = milestone.amount - amountToSeller;
         if (refund > 0) {
             token.safeTransfer(buyer, refund);
+            releasedAmount += refund;
             emit FundsRefunded(buyer, refund);
         }
 
         emit DisputeResolved(milestoneIndex, amountToSeller > 0);
+
+        completedMilestones++;
+        if (completedMilestones == milestones.length) {
+            isFinalized = true;
+            emit EscrowFinalized(releasedAmount, totalAmount - releasedAmount);
+        }
+    }
+
+    /**
+     * @dev Allows the buyer to cancel the escrow and refund all remaining funds if not finalized
+     */
+    function cancelEscrow() external onlyBuyer nonReentrant notFinalized {
+        uint256 refund = totalAmount - releasedAmount;
+        require(isLocked, "Funds not locked");
+        require(refund > 0, "No funds to refund");
+        isFinalized = true;
+        token.safeTransfer(buyer, refund);
+        emit FundsRefunded(buyer, refund);
+        emit EscrowFinalized(releasedAmount, refund);
     }
 
     /**
      * @dev Sets the obligation registry address for verification, only buyer can set
      */
     function setObligationRegistry(address registry) external onlyBuyer {
+        if (registry == address(0)) revert InvalidTokenAddress();
         obligationRegistry = registry;
+        emit ObligationRegistryUpdated(registry);
     }
 
     /**
      * @dev Grants dispute manager role to an address, only buyer can set per-escrow
      */
     function setDisputeManager(address disputeManager) external onlyBuyer {
+        if (disputeManager == address(0)) revert InvalidTokenAddress();
         _grantRole(DISPUTE_MANAGER_ROLE, disputeManager);
+        emit DisputeManagerGranted(disputeManager);
+    }
+
+    /**
+     * @dev Revokes dispute manager role from an address, only buyer can revoke
+     */
+    function revokeDisputeManager(address disputeManager) external onlyBuyer {
+        _revokeRole(DISPUTE_MANAGER_ROLE, disputeManager);
+        emit DisputeManagerRevoked(disputeManager);
     }
 
     /**
@@ -389,7 +451,7 @@ contract SmartChequeEscrow is
     function completeMilestone(
         uint256 milestoneIndex,
         bytes calldata proof
-    ) external nonReentrant notFinalized {
+    ) external nonReentrant notFinalized onlyBuyerOrSeller {
         if (!isLocked) revert FundsNotLocked();
         _completeMilestone(milestoneIndex, proof);
     }
@@ -424,31 +486,33 @@ contract SmartChequeEscrow is
         address recovered = ECDSAUpgradeable.recover(digest, signature);
         if (recovered != signer) revert InvalidSignature();
 
-        // Enhanced authorization replay protection
-        bytes32 authHash = keccak256(abi.encodePacked(digest, milestoneIndex, block.chainid));
-        if (consumedAuthorizations[authHash]) revert AuthorizationAlreadyUsed();
+        // Optimized authorization replay protection - use digest directly
+        if (consumedAuthorizations[digest]) revert AuthorizationAlreadyUsed();
         
-        // Check milestone hasn't been completed
-        if (milestone.isCompleted) revert MilestoneAlreadyCompleted();
+        // Check available funds
+        require(releasedAmount + milestone.amount <= totalAmount, "Insufficient funds");
         
         // Mark authorization as used and milestone as completed
-        consumedAuthorizations[authHash] = true;
+        consumedAuthorizations[digest] = true;
         milestone.isCompleted = true;
         
-        emit AuthorizationConsumed(authHash, milestoneIndex);
+        emit AuthorizationConsumed(digest, milestoneIndex);
         token.safeTransfer(recipient, milestone.amount);
+        releasedAmount += milestone.amount;
         emit MilestoneCompleted(milestoneIndex, milestone.amount);
+        completedMilestones++;
 
-        bool allCompleted = true;
-        for (uint256 i = 0; i < milestones.length; i++) {
-            if (!milestones[i].isCompleted) {
-                allCompleted = false;
-                break;
-            }
-        }
-        if (allCompleted) {
+        // Optimized check for all milestones completed
+        if (completedMilestones == milestones.length) {
             isFinalized = true;
+            emit EscrowFinalized(releasedAmount, totalAmount - releasedAmount);
         }
     }
 
+    /**
+     * @dev Returns the remaining funds in escrow
+     */
+    function remainingFunds() public view returns (uint256) {
+        return totalAmount - releasedAmount;
+    }
 }
