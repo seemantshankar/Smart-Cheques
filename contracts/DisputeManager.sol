@@ -68,10 +68,10 @@ contract DisputeManager is
     }
 
     // Mapping from dispute ID to Dispute
-    mapping(bytes32 => Dispute) public disputes;
+    mapping(bytes32 => Dispute) private disputes;
     
     // Mapping from cheque address to array of dispute IDs
-    mapping(address => bytes32[]) public chequeDisputes;
+    mapping(address => bytes32[]) private chequeDisputes;
     
     // Multi-arbitrator panel mappings
     mapping(bytes32 => mapping(address => ArbitratorVote)) public disputeVotes;
@@ -79,7 +79,7 @@ contract DisputeManager is
     mapping(bytes32 => mapping(ResolutionType => uint256)) public resolutionAmountSum;
     
     // Panel configurations
-    mapping(bytes32 => PanelConfig) public panelConfigs;
+    mapping(bytes32 => PanelConfig) private panelConfigs;
     bytes32[] public activePanels;
     address[] public registeredArbitrators;
     
@@ -162,9 +162,6 @@ contract DisputeManager is
     error NotAssignedArbitrator();
     error InvalidArbitrator();
     error OnlyBuyerOrSeller();
-    error NotArbitratorRole();
-    error PanelNotActive();
-    error InvalidPanelConfiguration();
     error NoPanelAssigned();
     error NotInAssignedPanel();
     error AlreadyVoted();

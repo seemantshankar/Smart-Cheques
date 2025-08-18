@@ -21,30 +21,29 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
     // Custom errors
     error InvalidBlockNumber();
     error InvalidParentHash();
-    error InvalidProposer();
-    error BlockAlreadyExists();
+
+
     error BlockNotFound();
     error InvalidSignature();
-    error InsufficientValidators();
+
     error BlockAlreadyFinalized();
     error InvalidFraudProof();
     error InvalidChallengePeriod();
     error ChallengeAlreadyExists();
     error ChallengeNotFound();
-    error InvalidChallengeState();
+
     error UnauthorizedAccess();
     error ArrayTooLarge();
     error InvalidTimestamp();
-    error InvalidStateRoot();
-    error InvalidTransactionsRoot();
-    error InvalidReceiptsRoot();
+
+
     error InvalidGasLimit();
     error ExtraDataTooLong();
     error AlreadyVoted();
     error BlockTooOld();
     error InvalidValidatorSet();
     error InsufficientChallengeBond();
-    error InvalidMerkleProof();
+
     
     // Roles
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -315,19 +314,19 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @param stateTransition Claimed state transition
      * @param transactions Transactions in the block
      * @param receipts Transaction receipts
-     * @param merkleProofs Merkle proofs for verification
+
      */
     function submitFraudProof(
         bytes32 blockHash,
         bytes32 stateTransition,
         bytes[] memory transactions,
         bytes[] memory receipts,
-        bytes[] memory merkleProofs,
+        bytes[] memory /* merkleProofs */,
         bytes memory externalEncodedProof
     ) external whenNotPaused nonReentrant {
         if (transactions.length > 1000) revert ArrayTooLarge();
         if (receipts.length > 1000) revert ArrayTooLarge();
-        if (merkleProofs.length > 1000) revert ArrayTooLarge();
+
         BlockValidation storage validation = blockValidations[blockHash];
         if (validation.blockHash == bytes32(0)) revert BlockNotFound();
         if (validation.finalized) revert BlockAlreadyFinalized();
@@ -356,7 +355,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
             stateTransition: stateTransition,
             transactions: transactions,
             receipts: receipts,
-            merkleProofs: merkleProofs,
+            merkleProofs: new bytes[](0),
             challenger: msg.sender,
             timestamp: block.timestamp,
             bondAmount: bondAmount,
@@ -542,24 +541,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         return blockHeaders[blockNumber];
     }
     
-    /**
-     * @dev Verify Merkle proof for a leaf against a root
-     * @param leaf The leaf to verify
-     * @param root The Merkle root
-     * @param proof Array of sibling hashes for the proof
-     * @return True if the proof is valid
-     */
-    function _verifyMerkleProof(bytes32 leaf, bytes32 root, bytes32[] memory proof) internal pure returns (bool) {
-        bytes32 computed = leaf;
-        for (uint256 i = 0; i < proof.length; i++) {
-            if (computed < proof[i]) {
-                computed = keccak256(abi.encodePacked(computed, proof[i]));
-            } else {
-                computed = keccak256(abi.encodePacked(proof[i], computed));
-            }
-        }
-        return computed == root;
-    }
+
 
     /**
      * @dev Verify state transition with proper Merkle proof verification
@@ -567,7 +549,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
      * @param stateTransition State transition hash
      * @param transactions Transaction data
      * @param receipts Receipt data
-     * @param merkleProofs Merkle proofs (flattened array of proof hashes)
+
      * @return True if fraud is proven (i.e., block data is incorrect)
      */
     function _verifyStateTransition(
@@ -575,7 +557,7 @@ contract ConsensusManager is AccessControl, ReentrancyGuard, Pausable {
         bytes32 stateTransition,
         bytes[] memory transactions,
         bytes[] memory receipts,
-        bytes[] memory merkleProofs
+        bytes[] memory /* merkleProofs */
     ) internal view returns (bool) {
         // Get the block header to compare against
         BlockHeader memory header = _getBlockByHash(blockHash);

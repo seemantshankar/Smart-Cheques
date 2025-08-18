@@ -61,6 +61,11 @@ describe("DisputeManager - Comprehensive Tests", function () {
     const mockToken = await MockERC20Factory.deploy("Test Token", "TEST", ethers.parseEther("1000000")) as any;
     await mockToken.waitForDeployment();
 
+    // Deploy mock obligation registry
+    const MockRegistryFactory = await ethers.getContractFactory("contracts/mocks/MockObligationRegistry.sol:MockObligationRegistry");
+    const mockRegistry = await MockRegistryFactory.deploy();
+    await mockRegistry.waitForDeployment();
+
     // Deploy SmartChequeEscrow
     const ChequeEscrowFactory = await ethers.getContractFactory("SmartChequeEscrow");
     const totalAmount = ethers.parseEther("1.0");
@@ -81,6 +86,9 @@ describe("DisputeManager - Comprehensive Tests", function () {
     // Fund buyer and approve escrow to spend tokens
     await mockToken.mint(await buyer.getAddress(), totalAmount);
     await mockToken.connect(buyer).approve(await chequeEscrow.getAddress(), totalAmount);
+    
+    // Set obligation registry before locking funds
+    await chequeEscrow.connect(buyer).setObligationRegistry(await mockRegistry.getAddress());
     
     // Lock funds in escrow
     await chequeEscrow.connect(buyer).lockFunds(await mockToken.getAddress());

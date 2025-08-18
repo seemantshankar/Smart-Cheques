@@ -137,11 +137,11 @@ Summary (action checklist)
 - [x] D. Review completedMilestones increment logic for double-marking.
 
 #### Tests to Add / Verify
-- [ ] 1. EIP-712 signing end-to-end: use `eth_signTypedData_v4` and verify replay protection.
-- [ ] 2. Lock flow: test `setObligationRegistry(...)`, `lockFunds(token)`, and revert without registry.
-- [ ] 3. Edge case: token transfer failure simulation (mock token that reverts, releasedAmount not increased).
-- [ ] 4. Dispute resolution accounting: releasedAmount and completedMilestones after dispute flows.
-- [ ] 5. Initialize per-test: use `upgrades.deployProxy()` or fresh contract per test.
+- [x] 1. EIP-712 signing end-to-end: use `eth_signTypedData_v4` and verify replay protection.
+- [x] 2. Lock flow: test `setObligationRegistry(...)`, `lockFunds(token)`, and revert without registry.
+- [x] 3. Edge case: token transfer failure simulation (mock token that reverts, releasedAmount not increased).
+- [x] 4. Dispute resolution accounting: releasedAmount and completedMilestones after dispute flows.
+- [x] 5. Initialize per-test: use `upgrades.deployProxy()` or fresh contract per test.
 
 #### Small Nitpicks & Polish
 - [ ] MILESTONE_TYPEHASH includes contractAddress and chainId (redundant with domain, harmless).

@@ -137,7 +137,7 @@ contract FraudProofManager is
         address winner;
     }
     
-    mapping(uint256 => VerificationGame) public verificationGames;
+    mapping(uint256 => VerificationGame) private verificationGames;
     uint256 public totalGames;
     
     // Events
@@ -170,11 +170,7 @@ contract FraudProofManager is
         address defender
     );
     
-    event VerificationGameCompleted(
-        uint256 indexed gameId,
-        address indexed winner,
-        uint256 steps
-    );
+
     
     event FraudProven(
         uint256 indexed challengeId,
@@ -209,7 +205,7 @@ contract FraudProofManager is
     error InvalidWinner();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() public {
+    constructor() {
         _disableInitializers();
     }
 
@@ -639,6 +635,41 @@ contract FraudProofManager is
      */
     function unpause() external onlyRole(ADMIN_ROLE) {
         _unpause();
+    }
+
+    /**
+     * @dev Get verification game details including state hashes
+     * @param gameId The game ID to query
+     * @return challengeId The challenge ID
+     * @return challenger The challenger address
+     * @return defender The defender address
+     * @return currentStep The current step
+     * @return totalSteps The total steps
+     * @return stateHashes The array of state hashes
+     * @return completed Whether the game is completed
+     * @return winner The winner address
+     */
+    function getVerificationGame(uint256 gameId) external view returns (
+        uint256 challengeId,
+        address challenger,
+        address defender,
+        uint256 currentStep,
+        uint256 totalSteps,
+        bytes32[] memory stateHashes,
+        bool completed,
+        address winner
+    ) {
+        VerificationGame storage game = verificationGames[gameId];
+        return (
+            game.challengeId,
+            game.challenger,
+            game.defender,
+            game.currentStep,
+            game.totalSteps,
+            game.stateHashes,
+            game.completed,
+            game.winner
+        );
     }
 
     /**

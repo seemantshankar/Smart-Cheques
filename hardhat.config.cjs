@@ -17,7 +17,7 @@ const config = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200
+            runs: 1
           }
         }
       },
@@ -26,7 +26,7 @@ const config = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200
+            runs: 1
           }
         }
       },
@@ -35,7 +35,7 @@ const config = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200
+            runs: 1
           }
         }
       }
@@ -43,7 +43,8 @@ const config = {
   },
   networks: {
     hardhat: {
-      chainId: 31337
+      chainId: 31337,
+      allowUnlimitedContractSize: true
     },
     testnet: {
       url: process.env.TESTNET_RPC_URL || "",

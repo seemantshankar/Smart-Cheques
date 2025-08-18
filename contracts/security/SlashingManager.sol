@@ -171,27 +171,26 @@ contract SlashingManager is
     error InvalidValidatorAddress();
     error InvalidSlashingType();
     error InvalidPenaltyPercentage();
-    error InvalidJailDuration();
+
     error InvalidEvidenceHash();
     error InvalidEvidenceData();
     error EvidenceAlreadySubmitted();
     error EvidenceNotVerified();
-    error ValidatorAlreadyJailed();
+
     error ValidatorNotJailed();
     error JailPeriodNotExpired();
     error InsufficientStake();
     error AppealPeriodExpired();
-    error AppealAlreadySubmitted();
-    error SlashingConfigNotFound();
+
+
     error InvalidRecordId();
     error NotYourSlashingRecord();
     error AlreadyAppealed();
     error AlreadyResolved();
     error PenaltyTooHigh();
-    error InvalidImplementation();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() public {
+    constructor() {
         _disableInitializers();
     }
 
@@ -544,7 +543,7 @@ contract SlashingManager is
      * @param validator Validator address
      * @return stake Validator stake amount
      */
-    function _getValidatorStake(address validator) internal view returns (uint256) {
+    function _getValidatorStake(address validator) internal pure returns (uint256) {
         // This is a placeholder - in practice, this would call the validator manager
         // to get the actual stake amount
         validator; // Silence unused parameter warning

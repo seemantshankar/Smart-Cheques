@@ -144,12 +144,7 @@ contract SequencerManager is
         string reason
     );
 
-    event SequencerExitInitiated(
-        address indexed sequencer,
-        uint256 exitTime
-    );
 
-    event SequencerExited(address indexed sequencer, uint256 stake);
 
     event StakeDelegated(
         address indexed delegator,
@@ -175,11 +170,7 @@ contract SequencerManager is
         uint256 timestamp
     );
 
-    event RewardsDistributed(
-        address indexed sequencer,
-        uint256 sequencerReward,
-        uint256 delegatorReward
-    );
+
 
     // Custom errors
     error InsufficientStake();
@@ -205,7 +196,7 @@ contract SequencerManager is
     error InvalidImplementation();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() public {
+    constructor() {
         _disableInitializers();
     }
 
@@ -554,7 +545,7 @@ contract SequencerManager is
     /**
      * @dev Authorize contract upgrades
      */
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
+    function _authorizeUpgrade(address newImplementation) internal view override onlyRole(ADMIN_ROLE) {
         if (newImplementation == address(0)) revert InvalidImplementation();
     }
 
