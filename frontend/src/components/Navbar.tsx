@@ -28,6 +28,7 @@ import {
 } from '@chakra-ui/react';
 
 import { metaMask, metaMaskHooks } from '../connectors';
+import { useAppToast } from './useAppToast';
 
 const Navbar = () => {
   const { useChainId, useAccounts, useIsActivating, useIsActive, useProvider } = metaMaskHooks;
@@ -41,6 +42,7 @@ const Navbar = () => {
   const _library = provider;
   const { isOpen: _isOpen, onOpen: _onOpen, onClose: _onClose } = useDisclosure();
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(true);
+  const toast = useAppToast();
 
   useEffect(() => {
     // Check if MetaMask is installed
@@ -78,6 +80,7 @@ const Navbar = () => {
       const expectedChainId = Number(import.meta.env.VITE_CHAIN_ID || '31337');
       if (chainId !== expectedChainId) {
         console.warn(`Connected to wrong chain. Expected: ${expectedChainId}, Got: ${chainId}`);
+        toast.warning('Wrong network', `Connected to chain ${chainId}. Expected ${expectedChainId}.`);
       }
     }
   }, [active, account, chainId]);
@@ -161,7 +164,7 @@ const connectWallet = async () => {
   console.log('Attempting to connect wallet...');
   
   if (!isMetaMaskInstalled) {
-    alert('MetaMask is not installed. Please install MetaMask to connect your wallet.');
+    toast.info('MetaMask required', 'Please install MetaMask to connect your wallet.');
     window.open('https://metamask.io/download/', '_blank');
     return;
   }
@@ -237,10 +240,10 @@ const connectWallet = async () => {
           });
           await metaMask.activate();
         } catch (addError: unknown) {
-          alert(`Failed to add network and connect wallet: ${addError instanceof Error ? addError.message : 'Unknown error'}`);
+          toast.error('Failed to add network', addError instanceof Error ? addError.message : 'Unknown error');
         }
       } else {
-        alert(`Failed to connect wallet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        toast.error('Failed to connect wallet', error instanceof Error ? error.message : 'Unknown error');
       }
     }
   };
@@ -338,11 +341,11 @@ const connectWallet = async () => {
               <Box>
                 {chainId && chainId !== Number(import.meta.env.VITE_CHAIN_ID || '1337') ? (
                   <Text color="orange.500" fontSize="xs" mb={1}>
-                    ⚠️ Wrong network! Switch to Localhost
+                    ⚠️ Wrong network! Expected {Number(import.meta.env.VITE_CHAIN_ID || '1337')} — Connected {chainId}
                   </Text>
                 ) : (
                   <Text fontSize="xs" color="gray.500" mb={1}>
-                    Connected: {chainId === 31337 ? 'Localhost' : `Chain ${chainId}`}
+                    Connected: {chainId === 31337 ? 'Localhost (31337)' : `Chain ${chainId}`}
                   </Text>
                 )}
                 <Button

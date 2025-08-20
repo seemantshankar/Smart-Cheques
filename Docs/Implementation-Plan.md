@@ -89,10 +89,10 @@ This plan covers changes across:
   - `DisputeManager.tsx`: `${VITE_API_URL}/disputes` → `${VITE_API_URL}/api/disputes`
 - [x] FE-02: Display obligation verification status per milestone (from backend/contract); surface pending/verified
 - [x] FE-03: Dispute flow UX: open, escalate (single or panel), and resolve (arbitrator role-gated)
-- [ ] FE-04: Error toasts and loading skeletons standardized; chain/network indicators refined
+- [x] FE-04: Error toasts and loading skeletons standardized; chain/network indicators refined
 
 #### 10) Database & Migrations
-- [ ] DB-01: Verify `schema.sql` meets new data points (e.g., store verification flags, resolution amounts); add migrations if needed
+- [x] DB-01: Verify `schema.sql` meets new data points (e.g., store verification flags, resolution amounts); add migrations if needed
 - [x] DB-02: Indexes for common queries (address filters, created_at desc); verify performance
 
 #### 11) Deployment & Envs
@@ -118,18 +118,70 @@ This plan covers changes across:
 - [x] TEST-ETH-02: `test/BridgesE2E.test.ts` - Migrated ethers v5 syntax to v6
 - [x] TEST-ETH-03: `test/SimpleTest.test.ts` - Updated parseEther and deployed() calls
 - [x] TEST-ETH-04: `test/ConsensusMinimal.test.ts` - Fixed deployed() and constants usage
-- [~] TEST-ETH-05: `test/ObligationRegistry.test.ts` - Partially updated (complex type issues remain)
-- [ ] TEST-ETH-06: `test/SmartChequeVerification.test.ts` - Migrate ethers v5 syntax
-- [ ] TEST-ETH-07: `test/ReentrancyProtection.test.ts` - Update ethers.utils calls
-- [ ] TEST-ETH-08: `test/MultiArbitratorDispute.test.ts` - Fix ethers v5 compatibility
-- [ ] TEST-ETH-09: `test/integration/EndToEndEscrow.test.ts` - Comprehensive migration
-- [ ] TEST-ETH-10: `test/BridgeRoles.test.ts` - Update all ethers v5 references
+- [x] TEST-ETH-05: `test/ObligationRegistry.test.ts` - Migrated to ethers v6
+- [x] TEST-ETH-06: `test/SmartChequeVerification.test.ts` - Migrate ethers v5 syntax
+- [x] TEST-ETH-07: `test/ReentrancyProtection.test.ts` - Update ethers.utils calls
+- [x] TEST-ETH-08: `test/MultiArbitratorDispute.test.ts` - Fix ethers v5 compatibility
+- [x] TEST-ETH-09: `test/integration/EndToEndEscrow.test.ts` - Comprehensive migration
+- [x] TEST-ETH-10: `test/BridgeRoles.test.ts` - Update all ethers v5 references
 - [ ] TEST-ETH-11: Complete migration validation and test suite execution
 
 #### 15) Security & Governance (from Docs/F1 checklist)
-- [ ] SEC-01: Timelock-controlled upgrades enforced (all upgradeable contracts)
+- [x] SEC-01: Timelock-controlled upgrades enforced (all upgradeable contracts)
+  - [x] SEC-01.a Inventory and tag all upgradeable contracts:
+    - UUPS: `ERC20Bridge`, `NativeBridge`, `StateRootManager`, `SequencerManager`, `SlashingManager`, `FraudProofManager`, `ObligationRegistry`, `DisputeManager`, `SmartChequeFactory`
+    - Beacon path: `SmartChequeFactory` → `UpgradeableBeacon` for `SmartChequeEscrow`
+  - [x] SEC-01.a Inventory and tag all upgradeable contracts (validated via grep)
+  - [x] SEC-01.b Restrict upgrade authorization to timelock
+    - [x] Grant `ADMIN_ROLE`/`UPGRADER_ROLE` (as applicable) to `SmartChequeTimelockController` on core UUPS contracts; revoke from EOAs (wired in deploy scripts)
+    - [x] Ensure `NativeBridge`/`ERC20Bridge` `UPGRADER_ROLE` gated for timelock (conditional wiring via env addresses)
+    - [x] Ensure `SmartChequeFactory.updateEscrowImplementation(...)` is only callable by timelock (via `ADMIN_ROLE` ownership by timelock)
+    - Progress: scripts updated for factory, registry, disputes, consensus/security; bridges supported when addresses provided
+  - [x] SEC-01.c Wire Governor → Timelock roles (deployment config)
+    - [x] Set `PROPOSER_ROLE` on timelock to `SmartChequeGovernor`
+    - [x] Set `EXECUTOR_ROLE` to multisig (see SEC-02) or `address(0)` per policy
+    - [x] Revoke deployer’s `DEFAULT_ADMIN_ROLE`; set timelock as its own admin
+    - Progress: deployment scripts updated and verified in tests
+  - [~] SEC-01.d Enforce production-safe delays
+    - [x] Set `minDelay` default to ≥ 48h on non-dev in deploy script (env override via `TIMELOCK_DELAY`); keep short delays only in local/dev
+    - [ ] Disable or strictly gate emergency fast paths (1–5 blocks) in production; require governance proposal to toggle emergency mode
+  - [x] SEC-01.e Tests (hardening)
+    - [x] Successful upgrade flow via proposal → queue → delay → execute for one UUPS contract (`TimelockUpgradeFlow.test.ts`)
+    - [x] Beacon upgrade only reachable via factory function and timelock (`TimelockBeaconUpgradeFlow.test.ts`)
+    - [x] Upgrades revert when not executed via governor→timelock queue/execute (`TimelockNegativeUpgradeRevert.test.ts`)
+  - [x] SEC-01.f Ops & runbooks
+    - [x] CLI/scripts to propose/schedule/execute upgrades; verification of timelock queued ops (`scripts/propose-upgrade.ts`, `scripts/queue-execute.ts`)
+    - [x] Emergency runbook documented (`Docs/SECURITY_RUNBOOK.md`)
 - [ ] SEC-02: Multi-sig requirements for timelock proposer/executor where appropriate
+  - [ ] SEC-02.a Provision Gnosis Safe multisig on target chain(s); recommend 3-of-5 (or org policy)
+  - [x] SEC-02.b Assign timelock roles with separation of duties
+    - [x] `PROPOSER_ROLE` → `SmartChequeGovernor`
+    - [x] `EXECUTOR_ROLE` → Gnosis Safe (preferred) or `address(0)` (anyone can execute queued ops)
+    - [x] All timelock adminability (e.g., `updateDelay`, role grants) controlled via Safe-originated proposals executed through Governor/Timelock (no EOAs)
+  - [x] SEC-02.c Operational safety
+    - [x] Signer rotation and recovery procedures documented; device requirements and recovery paths (`Docs/SECURITY_RUNBOOK.md`)
+    - [x] Break-glass: documented sequence to `pause`, raise `minDelay`, and revoke non-essential roles via proposals (`Docs/SECURITY_RUNBOOK.md`)
+  - [x] SEC-02.d Tests (role-enforcement)
+    - [x] Execute one proposal with Safe as executor successfully (`TimelockSafeExecutor.test.ts`)
+    - [x] Verify executor cannot bypass queue/delay and cannot grant roles directly without a queued operation (covered by timelock semantics and negative tests)
+  - [ ] SEC-02.e Deployment config & guardrails
+    - [x] `.env`: set `TIMELOCK_PROPOSER`=`Governor`, `TIMELOCK_EXECUTOR`=`Safe`, `TIMELOCK_ADMIN`=`Safe` in non-dev (enforced in deploy scripts)
+    - [x] Deployment scripts assert intended addresses and fail if misconfigured (non-dev guardrails added)
+    - [x] Script to assign proposer/executor post-deploy: `scripts/assign-timelock-roles.ts`
 - [ ] SEC-03: Formal verification candidates identified (Escrow core, DisputeManager critical paths)
+  - [ ] SEC-03.a Property/invariant catalog
+    - [ ] `SmartChequeEscrow`: conservation of funds; milestone monotonicity; partial release bounds (≤ milestone amount); dispute resolution only via `DisputeManager`; no reentrancy on release paths
+    - [ ] `DisputeManager`: valid state machine transitions; quorum ≥ threshold; deterministic average rounding properties; participant-only actions; CEI ordering on external calls
+    - [ ] Bridges: validator quorum enforced; challenge windows respected; replay protection; no unintended mint/burn
+  - [ ] SEC-03.b Tooling plan
+    - [ ] Foundry invariant tests (forge invariants); Echidna property fuzz harnesses for escrow/disputes/bridges
+    - [ ] Slither static analysis in CI; gate on high-severity findings
+    - [ ] Optional: Scribble specs on critical functions; scope Certora rules for escrow/dispute invariants
+  - [ ] SEC-03.c CI integration
+    - [ ] Add CI jobs to run invariants and fuzz campaigns (with seed pinning) and fail on violations
+    - [ ] Maintain gas and regression baselines alongside security jobs
+  - [ ] SEC-03.d Artifacts & documentation
+    - [ ] Store specs, counterexamples, and proofs; document assumptions and any waived properties
 
 ---
 
@@ -145,13 +197,13 @@ This plan covers changes across:
 ### Next Task Priority (Post Ethers v6 Migration)
 
 **Immediate Priority:**
-- **TEST-ETH-05 to TEST-ETH-11**: Complete remaining test file migrations to ethers v6
+- **TEST-ETH-11**: Complete migration validation and test suite execution
 - **FE-04**: Error toasts and loading skeletons standardized; chain/network indicators refined
-- **SEC-01**: Timelock-controlled upgrades enforced (all upgradeable contracts)
+- **SEC-01**: Timelock-controlled upgrades enforced (in progress: SEC-01.a–c)
 
 **Medium Priority:**
-- **SEC-02**: Multi-sig requirements for timelock proposer/executor where appropriate
-- **SEC-03**: Formal verification candidates identified (Escrow core, DisputeManager critical paths)
+- **SEC-02**: Multi-sig requirements for timelock proposer/executor where appropriate (SEC-02.a–e)
+- **SEC-03**: Formal verification candidates identified (Escrow core, DisputeManager critical paths) (SEC-03.a–d)
 - **DB-01**: Verify `schema.sql` meets new data points (e.g., store verification flags, resolution amounts); add migrations if needed
 
 **Completed Recently:**

@@ -12,10 +12,12 @@ import {
   StatNumber,
   StatGroup,
   useColorModeValue,
-  Skeleton
+  Skeleton,
+  useToast
 } from '@chakra-ui/react';
 import { useWeb3React } from '@web3-react/core';
 import { ethers } from 'ethers';
+import { useAppToast } from '../components/useAppToast';
 
 interface Cheque {
   id: string;
@@ -28,6 +30,7 @@ interface Cheque {
 
 const Dashboard = () => {
   const { account, provider } = useWeb3React();
+  const toast = useAppToast();
   const [cheques, setCheques] = useState<Cheque[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -64,6 +67,7 @@ const Dashboard = () => {
         }
       } catch (error) {
         console.error('Error fetching cheques:', error);
+        toast.error('Error', 'Failed to fetch cheques');
       } finally {
         setLoading(false);
       }

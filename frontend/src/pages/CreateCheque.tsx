@@ -8,7 +8,6 @@ import {
   Input,
   VStack,
   Heading,
-  useToast,
   NumberInput,
   NumberInputField,
   Divider,
@@ -19,6 +18,7 @@ import {
 } from '@chakra-ui/react';
 import { AddIcon, DeleteIcon } from '@chakra-ui/icons';
 import { useWeb3React } from '@web3-react/core';
+import { useAppToast } from '../components/useAppToast';
 import { ethers } from 'ethers';
 
 interface Milestone {
@@ -29,7 +29,7 @@ interface Milestone {
 
 const CreateCheque = () => {
   const navigate = useNavigate();
-  const toast = useToast();
+  const toast = useAppToast();
   const { account, provider } = useWeb3React();
 
   const [seller, setSeller] = useState('');
@@ -58,13 +58,7 @@ const CreateCheque = () => {
     e.preventDefault();
 
     if (!account || !provider) {
-      toast({
-        title: 'Error',
-        description: 'Please connect your wallet first',
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.error('Error', 'Please connect your wallet first');
       return;
     }
 
@@ -132,24 +126,12 @@ const CreateCheque = () => {
         })
       });
 
-      toast({
-        title: 'Success',
-        description: 'Smart Cheque created successfully',
-        status: 'success',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.success('Success', 'Smart Cheque created successfully');
 
       navigate(`/cheques/${chequeId}`);
     } catch (error: unknown) {
       console.error('Error creating cheque:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to create Smart Cheque',
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.error('Error', error instanceof Error ? error.message : 'Failed to create Smart Cheque');
     } finally {
       setLoading(false);
     }

@@ -69,11 +69,18 @@ async function main() {
         // 2. Deploy Timelock Controller
         console.log("\n2. Deploying Timelock Controller...");
         const TimelockController = await ethers.getContractFactory("TimelockController");
+        const isDev = network.name === 'hardhat' || network.name === 'localhost';
+        const execEnv = process.env.TIMELOCK_EXECUTOR;
+        const adminEnv = process.env.TIMELOCK_ADMIN;
+        if (!isDev) {
+            if (!execEnv) throw new Error('TIMELOCK_EXECUTOR must be set to multisig/non-deployer on non-dev');
+            if (!adminEnv) throw new Error('TIMELOCK_ADMIN must be set to multisig/non-deployer on non-dev');
+        }
         const timelock = await TimelockController.deploy(
             config.timelockDelay,
-            [deployer.address], // proposers
-            [deployer.address], // executors
-            deployer.address // admin
+            [deployer.address],
+            [execEnv || ethers.constants.AddressZero],
+            adminEnv || deployer.address
         );
         await timelock.deployed();
         deployedContracts.timelock = timelock.address;
@@ -197,7 +204,43 @@ async function main() {
         const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
         const EXECUTOR_ROLE = await timelock.EXECUTOR_ROLE();
         await timelock.grantRole(PROPOSER_ROLE, governanceDAO.address);
-        await timelock.grantRole(EXECUTOR_ROLE, governanceDAO.address);
+        const executor = process.env.TIMELOCK_EXECUTOR || ethers.constants.AddressZero;
+        await timelock.grantRole(EXECUTOR_ROLE, executor);
+        try { await timelock.grantRole(await timelock.DEFAULT_ADMIN_ROLE(), await timelock.getAddress()); } catch {}
+        try { await timelock.revokeRole(PROPOSER_ROLE, deployer.address); } catch {}
+        try { await timelock.revokeRole(EXECUTOR_ROLE, deployer.address); } catch {}
+        try { await timelock.revokeRole(await timelock.DEFAULT_ADMIN_ROLE(), deployer.address); } catch {}
+
+        // Transfer admin roles of upgradeable consensus/security contracts to timelock
+        console.log("\nTransferring admin roles to Timelock for consensus/security contracts...");
+        const DEFAULT_ADMIN_ROLE = await stateRootManager.DEFAULT_ADMIN_ROLE();
+        const ADMIN_ROLE_SRM = await stateRootManager.ADMIN_ROLE();
+        const ADMIN_ROLE_SEQ = await sequencerManager.ADMIN_ROLE();
+        const ADMIN_ROLE_SLM = await slashingManager.ADMIN_ROLE();
+        const ADMIN_ROLE_FPM = await fraudProofManager.ADMIN_ROLE();
+
+        // Grant DEFAULT_ADMIN_ROLE to timelock
+        await stateRootManager.grantRole(DEFAULT_ADMIN_ROLE, timelock.address);
+        await sequencerManager.grantRole(DEFAULT_ADMIN_ROLE, timelock.address);
+        await slashingManager.grantRole(DEFAULT_ADMIN_ROLE, timelock.address);
+        await fraudProofManager.grantRole(DEFAULT_ADMIN_ROLE, timelock.address);
+
+        // Grant ADMIN_ROLE to timelock and revoke from deployer
+        await stateRootManager.grantRole(ADMIN_ROLE_SRM, timelock.address);
+        await sequencerManager.grantRole(ADMIN_ROLE_SEQ, timelock.address);
+        await slashingManager.grantRole(ADMIN_ROLE_SLM, timelock.address);
+        await fraudProofManager.grantRole(ADMIN_ROLE_FPM, timelock.address);
+
+        try { await stateRootManager.revokeRole(ADMIN_ROLE_SRM, deployer.address); } catch {}
+        try { await sequencerManager.revokeRole(ADMIN_ROLE_SEQ, deployer.address); } catch {}
+        try { await slashingManager.revokeRole(ADMIN_ROLE_SLM, deployer.address); } catch {}
+        try { await fraudProofManager.revokeRole(ADMIN_ROLE_FPM, deployer.address); } catch {}
+
+        // Revoke deployer DEFAULT_ADMIN_ROLE
+        try { await stateRootManager.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address); } catch {}
+        try { await sequencerManager.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address); } catch {}
+        try { await slashingManager.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address); } catch {}
+        try { await fraudProofManager.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address); } catch {}
         
         console.log("Contract relationships configured successfully!");
 

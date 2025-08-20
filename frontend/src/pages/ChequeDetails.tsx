@@ -9,7 +9,6 @@ import {
   Button,
   Badge,
   Progress,
-  useToast,
   Divider,
   SimpleGrid,
   Textarea,
@@ -24,6 +23,7 @@ import {
 } from '@chakra-ui/react';
 import { useWeb3React } from '@web3-react/core';
 import { ethers } from 'ethers';
+import { useAppToast } from '../components/useAppToast';
 
 interface Milestone {
   amount: string;
@@ -48,7 +48,7 @@ interface Cheque {
 const ChequeDetails = () => {
   const { id } = useParams<{ id: string }>();
   const { account, provider } = useWeb3React();
-  const toast = useToast();
+  const toast = useAppToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
 
   const [cheque, setCheque] = useState<Cheque | null>(null);
@@ -76,13 +76,7 @@ const ChequeDetails = () => {
       }
     } catch (error) {
       console.error('Error fetching cheque details:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load cheque details',
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.error('Error', 'Failed to load cheque details');
     } finally {
       setLoading(false);
     }
@@ -108,26 +102,14 @@ const ChequeDetails = () => {
 
       await tx.wait();
 
-      toast({
-        title: 'Success',
-        description: 'Milestone completed successfully',
-        status: 'success',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.success('Success', 'Milestone completed successfully');
 
       onClose();
       fetchChequeDetails();
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to complete milestone';
       console.error('Error completing milestone:', error);
-      toast({
-        title: 'Error',
-        description: errorMessage,
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+      toast.error('Error', errorMessage);
     } finally {
       setCompleting(false);
     }
@@ -166,13 +148,13 @@ const ChequeDetails = () => {
         })
       });
       if (!res.ok) throw new Error('Failed to open dispute');
-      toast({ title: 'Dispute opened', status: 'success', duration: 4000, isClosable: true });
+      toast.success('Success', 'Dispute opened');
       setDisputeOpen(false);
       setDisputeReason('');
       setDisputeEvidence('');
       fetchChequeDetails();
     } catch (e) {
-      toast({ title: 'Error', description: 'Failed to open dispute', status: 'error', duration: 5000, isClosable: true });
+      toast.error('Error', 'Failed to open dispute');
     }
   };
 

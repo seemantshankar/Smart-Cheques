@@ -14,13 +14,30 @@ async function main() {
 
   // Deploy TimelockController
   console.log("Deploying SmartChequeTimelockController...");
+  const isDev = hre.network.name === "hardhat" || hre.network.name === "localhost";
   const proposers: string[] = [process.env.TIMELOCK_PROPOSER || (await ethers.getSigners())[0].address];
-  const executors: string[] = [process.env.TIMELOCK_EXECUTOR || (await ethers.getSigners())[0].address];
-  const admin: string = process.env.TIMELOCK_ADMIN || (await ethers.getSigners())[0].address;
+  const executorsEnv = process.env.TIMELOCK_EXECUTOR;
+  const executors: string[] = [executorsEnv || (isDev ? (await ethers.getSigners())[0].address : "")].filter(Boolean) as string[];
+  const adminEnv = process.env.TIMELOCK_ADMIN;
+  const admin: string = adminEnv || (await ethers.getSigners())[0].address;
+  if (!isDev) {
+    if (!executorsEnv || executorsEnv === (await ethers.getSigners())[0].address) {
+      throw new Error("TIMELOCK_EXECUTOR must be set to a multisig/non-deployer address on non-dev networks");
+    }
+    if (!adminEnv || adminEnv === (await ethers.getSigners())[0].address) {
+      throw new Error("TIMELOCK_ADMIN must be set to a multisig/non-deployer address on non-dev networks");
+    }
+  }
   const Timelock = await ethers.getContractFactory("SmartChequeTimelockController");
-  const timelock = await Timelock.deploy(2, proposers, executors, admin);
+  const defaultDelay = (hre.network.name === "hardhat" || hre.network.name === "localhost") ? 2 : 172800; // 2 days on non-dev
+  const delay = Number(process.env.TIMELOCK_DELAY || String(defaultDelay));
+  const timelock = await Timelock.deploy(delay, proposers, executors, admin);
   await timelock.deployed();
   console.log("Timelock deployed to:", timelock.address);
+  // Ensure timelock can self-administer roles
+  try {
+    await timelock.grantRole(await timelock.DEFAULT_ADMIN_ROLE(), await timelock.getAddress());
+  } catch {}
 
   // Deploy Governor wired to token + timelock
   console.log("Deploying SmartChequeGovernor...");
@@ -86,6 +103,10 @@ async function main() {
   await smartChequeFactory.grantRole(await smartChequeFactory.DEFAULT_ADMIN_ROLE(), timelock.address);
   await obligationRegistry.grantRole(await obligationRegistry.DEFAULT_ADMIN_ROLE(), timelock.address);
   await disputeManager.grantRole(await disputeManager.DEFAULT_ADMIN_ROLE(), timelock.address);
+  // Revoke deployer's DEFAULT_ADMIN_ROLE from contracts
+  await smartChequeFactory.revokeRole(await smartChequeFactory.DEFAULT_ADMIN_ROLE(), deployer.address);
+  await obligationRegistry.revokeRole(await obligationRegistry.DEFAULT_ADMIN_ROLE(), deployer.address);
+  await disputeManager.revokeRole(await disputeManager.DEFAULT_ADMIN_ROLE(), deployer.address);
   // Grant ADMIN_ROLE to timelock on upgradeables
   if (smartChequeFactory.functions["ADMIN_ROLE"]) {
     await smartChequeFactory.grantRole(await smartChequeFactory.ADMIN_ROLE(), timelock.address);
@@ -105,10 +126,38 @@ async function main() {
   const EXECUTOR_ROLE = await timelock.EXECUTOR_ROLE();
   await timelock.grantRole(PROPOSER_ROLE, governor.address);
   // Allow anyone to execute by granting to zero address if desired; otherwise use env EXECUTOR
-  const executor = process.env.TIMELOCK_EXECUTOR || ethers.constants.AddressZero;
+  const executor = process.env.TIMELOCK_EXECUTOR || (ethers as any).constants?.AddressZero || "0x0000000000000000000000000000000000000000";
   await timelock.grantRole(EXECUTOR_ROLE, executor);
-  // Revoke deployer admin
+  // Revoke deployer proposer/executor roles if present
+  try { await timelock.revokeRole(PROPOSER_ROLE, deployer.address); } catch {}
+  try { await timelock.revokeRole(EXECUTOR_ROLE, deployer.address); } catch {}
+  // Revoke deployer admin on timelock
   await timelock.revokeRole(await timelock.DEFAULT_ADMIN_ROLE(), deployer.address);
+
+  // Optionally wire bridges to timelock if addresses provided
+  const erc20BridgeAddress = process.env.ERC20_BRIDGE_ADDRESS;
+  const nativeBridgeAddress = process.env.NATIVE_BRIDGE_ADDRESS;
+  const zeroAddr = (ethers as any).constants?.AddressZero || "0x0000000000000000000000000000000000000000";
+  const addressesToWire = [
+    { name: "ERC20Bridge", address: erc20BridgeAddress },
+    { name: "NativeBridge", address: nativeBridgeAddress }
+  ].filter(x => x.address && x.address !== zeroAddr);
+  for (const entry of addressesToWire) {
+    try {
+      console.log(`Wiring ${entry.name} roles to Timelock at ${entry.address}...`);
+      const contract = await ethers.getContractAt(entry.name, entry.address);
+      const DEFAULT_ADMIN_ROLE = await contract.DEFAULT_ADMIN_ROLE();
+      await contract.grantRole(DEFAULT_ADMIN_ROLE, timelock.address);
+      try { await contract.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address); } catch {}
+      if (contract.functions["UPGRADER_ROLE"]) {
+        const UPGRADER_ROLE = await contract.UPGRADER_ROLE();
+        await contract.grantRole(UPGRADER_ROLE, timelock.address);
+        try { await contract.revokeRole(UPGRADER_ROLE, deployer.address); } catch {}
+      }
+    } catch (e) {
+      console.warn(`Skipping ${entry.name} wiring due to error:`, e);
+    }
+  }
 
   // Set treasury on ValidatorManager (when deployed later) using env var
   const treasury = process.env.TREASURY_ADDRESS || deployer.address;
